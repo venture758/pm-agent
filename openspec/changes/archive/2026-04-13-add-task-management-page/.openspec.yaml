@@ -1,0 +1,3 @@
+name: add-task-management-page
+description: "任务管理页面支持独立上传任务列表 Excel，并基于 Excel 字段驱动数据库建模与入库"
+status: proposed
