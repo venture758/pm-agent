@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from typing import Iterable, Mapping, Optional
+from typing import Any, Iterable, Mapping, Optional
 
 from .models import (
     AssignmentRecommendation,
@@ -10,6 +10,7 @@ from .models import (
     ModuleKnowledgeEntry,
     RequirementItem,
     StoryRecord,
+    TaskHistoryProfile,
     TaskRecord,
 )
 from .utils import (
@@ -24,10 +25,55 @@ from .utils import (
 )
 
 
+def aggregate_task_history(
+    task_records: list[dict[str, Any]],
+) -> dict[str, TaskHistoryProfile]:
+    """按 owner 聚合任务记录，生成每位成员的 TaskHistoryProfile。"""
+    profiles: dict[str, TaskHistoryProfile] = {}
+
+    for record in task_records:
+        owner = str(record.get("owner") or "").strip()
+        if not owner:
+            continue
+
+        if owner not in profiles:
+            profiles[owner] = TaskHistoryProfile(member_name=owner)
+
+        profile = profiles[owner]
+        profile.total_tasks += 1
+
+        task_type = str(record.get("task_type") or "")
+        if "设计" in task_type or "编码" in task_type:
+            profile.design_coding_tasks += 1
+
+        module_path = str(record.get("module_path") or "").strip()
+        if module_path:
+            profile.module_path_counts[module_path] = profile.module_path_counts.get(module_path, 0) + 1
+
+        story_code = str(record.get("story_code") or record.get("related_story") or "").strip()
+        if story_code:
+            profile.story_task_counts[story_code] = profile.story_task_counts.get(story_code, 0) + 1
+
+        planned = float(record.get("planned_person_days") or 0.0)
+        actual = float(record.get("actual_person_days") or 0.0)
+        if planned and actual:
+            ratio = actual / planned
+            if profile.avg_actual_vs_planned == 0.0:
+                profile.avg_actual_vs_planned = ratio
+            else:
+                profile.avg_actual_vs_planned = (profile.avg_actual_vs_planned + ratio) / 2.0
+
+        defects = record.get("defects") or record.get("defect_count") or 0
+        profile.total_defects += int(float(defects))
+
+    return profiles
+
+
 def _member_score(
     requirement: RequirementItem,
     member: MemberProfile,
     module_entry: Optional[ModuleKnowledgeEntry],
+    task_profile: Optional[TaskHistoryProfile] = None,
 ) -> tuple[float, list[str]]:
     score = 0.0
     reasons: list[str] = []
@@ -57,6 +103,50 @@ def _member_score(
         reasons.append("高风险需求优先匹配高经验成员")
     if any("不可分配" in item for item in member.constraints):
         score -= 100
+
+    # Task history scoring (incremental, low weight)
+    if task_profile and task_profile.total_tasks > 0:
+        # Module path matching: +1 per matching task, capped at +3
+        matched_module_key = requirement.matched_module_keys[0] if requirement.matched_module_keys else ""
+        if matched_module_key:
+            matching_tasks = 0
+            for mp, count in task_profile.module_path_counts.items():
+                if matched_module_key in mp or mp in matched_module_key:
+                    matching_tasks += count
+            if matching_tasks > 0:
+                bonus = min(matching_tasks, 3)
+                score += bonus
+                reasons.append(f"该成员在匹配模块有 {matching_tasks} 条任务记录")
+
+        # Design-and-coding experience: +1
+        if task_profile.design_coding_tasks > 0:
+            score += 1
+            reasons.append(f"该成员有 {task_profile.design_coding_tasks} 条设计与编码任务经验")
+
+        # Related story matching: +1
+        story_match_key = None
+        for key in requirement.matched_module_keys:
+            for story_code in task_profile.story_task_counts:
+                if key in story_code or story_code in key:
+                    story_match_key = story_code
+                    break
+            if story_match_key:
+                break
+        if story_match_key:
+            score += 1
+            reasons.append(f"该成员在关联故事下有 {task_profile.story_task_counts[story_match_key]} 条任务记录")
+
+        # Estimation accuracy: +0.5 if ratio is between 0.8 and 1.2
+        ratio = task_profile.avg_actual_vs_planned
+        if 0.8 <= ratio <= 1.2:
+            score += 0.5
+            reasons.append("历史任务估算准确度较高")
+
+        # High defect rate: -1 if defects > tasks * 2
+        if task_profile.total_tasks > 0 and task_profile.total_defects > task_profile.total_tasks * 2:
+            score -= 1
+            reasons.append("历史任务缺陷率偏高")
+
     return score, reasons
 
 
@@ -64,6 +154,7 @@ def recommend_assignments(
     requirements: Iterable[RequirementItem],
     members: Iterable[MemberProfile],
     module_lookup: Mapping[str, ModuleKnowledgeEntry],
+    task_history: Optional[Mapping[str, TaskHistoryProfile]] = None,
 ) -> list[AssignmentRecommendation]:
     member_list = list(members)
     recommendations: list[AssignmentRecommendation] = []
@@ -72,7 +163,8 @@ def recommend_assignments(
         dev_candidates: list[tuple[MemberProfile, float, list[str]]] = []
         test_candidates: list[tuple[MemberProfile, float, list[str]]] = []
         for member in member_list:
-            score, reasons = _member_score(requirement, member, matched_module)
+            tp = (task_history or {}).get(member.name) if task_history else None
+            score, reasons = _member_score(requirement, member, matched_module, task_profile=tp)
             if member.role in {"qa", "tester", "test"}:
                 test_candidates.append((member, score, reasons))
             else:

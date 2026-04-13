@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from typing import Any, Iterable, Mapping
+from typing import Any, Iterable, Mapping, Optional
 
-from .models import ConfirmedAssignment, MemberProfile, ModuleKnowledgeEntry, RequirementItem
+from .models import ConfirmedAssignment, MemberProfile, ModuleKnowledgeEntry, RequirementItem, TaskHistoryProfile
 
 SYSTEM_PROMPT = """\
 你是项目经理智能体（Project Manager Agent），服务于软件研发团队的日常需求管理工作。
@@ -110,13 +110,25 @@ def build_module_context(module_entries: Iterable[ModuleKnowledgeEntry]) -> str:
     return "\n".join(lines) if lines else "  （暂无模块信息）"
 
 
-def build_member_context(members: Iterable[MemberProfile]) -> str:
+def build_member_context(
+    members: Iterable[MemberProfile],
+    task_history: Optional[Mapping[str, TaskHistoryProfile]] = None,
+) -> str:
     """从团队成员构建 Prompt 上下文。"""
     lines: list[str] = []
     for m in sorted(members, key=lambda x: x.name):
         load_info = f"{m.workload:.1f}/{m.capacity:.1f}"
         skills = f"技能[{', '.join(m.skills)}]" if m.skills else "无特定技能"
-        lines.append(f"  {m.name}: 角色={m.role}, {skills}, 经验={m.experience_level}, 负载={load_info}")
+        line = f"  {m.name}: 角色={m.role}, {skills}, 经验={m.experience_level}, 负载={load_info}"
+        # Append task history summary if available
+        if task_history and m.name in task_history:
+            tp = task_history[m.name]
+            top_module = max(tp.module_path_counts, key=tp.module_path_counts.get) if tp.module_path_counts else ""
+            history_part = f"{tp.total_tasks}条任务, {tp.design_coding_tasks}条设计与编码"
+            if top_module:
+                history_part += f", 主要模块: {top_module}"
+            line += f"\n    任务历史: {history_part}"
+        lines.append(line)
     return "\n".join(lines) if lines else "  （暂无成员信息）"
 
 

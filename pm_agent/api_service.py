@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Mapping
 from uuid import uuid4
 
+from .assignment import aggregate_task_history
 from .insights import build_load_heatmap, compute_insight_summary, detect_single_points, suggest_growth_paths
 from .intake import (
     detect_assignment_blockers,
@@ -107,7 +108,10 @@ class WorkspaceService:
         logger.info("[chat] 构建成员画像 workspace_id=%s", workspace_id)
         profiles = self._build_managed_member_profiles(workspace)
         logger.info("[chat] 调用 LLM 解析需求 workspace_id=%s", workspace_id)
-        requirements, reply = self.agent.parse_requirements_with_llm(user_message, profiles)
+        # 加载任务历史用于 LLM 成员上下文
+        task_records = self.workspaces.load_task_records_by_workspace_id(workspace_id)
+        task_history = aggregate_task_history(task_records)
+        requirements, reply = self.agent.parse_requirements_with_llm(user_message, profiles, task_history=task_history)
         logger.info("[chat] LLM 返回完成 workspace_id=%s 需求数=%d reply_len=%d", workspace_id, len(requirements), len(reply))
 
         # Append assistant reply
@@ -271,7 +275,10 @@ class WorkspaceService:
             raise ValueError("当前会话没有可推荐需求，请先输入本轮需求")
         requirements, members = self._intake_workspace(workspace, session_requirement_ids=set(session_requirement_ids))
         self._sync_workspace_modules_to_agent(workspace)
-        recommendations = self.agent.recommend(requirements, members)
+        # 加载任务历史用于推荐评分
+        task_records = self.workspaces.load_task_records_by_workspace_id(workspace_id)
+        task_history = aggregate_task_history(task_records)
+        recommendations = self.agent.recommend(requirements, members, task_history=task_history)
         workspace.normalized_requirements = self._merge_workspace_requirements(
             workspace.normalized_requirements,
             requirements,

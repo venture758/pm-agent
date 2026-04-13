@@ -114,9 +114,10 @@ class ProjectManagerAgent:
         self,
         requirements: list[RequirementItem],
         members: Optional[list[MemberProfile]] = None,
+        task_history: Optional[Mapping[str, object]] = None,
     ) -> list[AssignmentRecommendation]:
         profiles = members or self.build_member_profiles()
-        recommendations = recommend_assignments(requirements, profiles, self.state.module_entries)
+        recommendations = recommend_assignments(requirements, profiles, self.state.module_entries, task_history=task_history)
         validate_recommendations(recommendations)
         return recommendations
 
@@ -175,6 +176,7 @@ class ProjectManagerAgent:
         self,
         user_message: str,
         members: Optional[list[MemberProfile]] = None,
+        task_history: Optional[Mapping[str, object]] = None,
     ) -> tuple[list[RequirementItem], str]:
         """需求理解 Agent：调用 LLM 解析用户消息，返回 RequirementItem 列表和自然语言回复。"""
         if not self._llm:
@@ -183,7 +185,7 @@ class ProjectManagerAgent:
         profiles = members or self.build_member_profiles()
         logger.info("[chat.llm] 构建上下文 member_count=%d module_count=%d", len(profiles), len(self.state.module_entries))
         module_context = build_module_context(self.state.module_entries.values())
-        member_context = build_member_context(profiles)
+        member_context = build_member_context(profiles, task_history=task_history)
         system_prompt = SYSTEM_PROMPT.format(
             module_context=module_context,
             member_context=member_context,

@@ -596,6 +596,41 @@ class WorkspaceStore:
 
         return created_count, updated_count
 
+    def load_task_records_by_workspace_id(
+        self,
+        workspace_id: str,
+    ) -> list[dict[str, Any]]:
+        """加载工作区全部任务记录，供推荐评分流程消费。"""
+        select_columns = ", ".join(TASK_DB_COLUMNS)
+        sql = f"SELECT {select_columns} FROM workspace_task_records WHERE workspace_id = {self.database.placeholder}"
+
+        try:
+            with self.database.connection() as connection:
+                cursor = connection.cursor()
+                cursor.execute(sql, [workspace_id])
+                rows = cursor.fetchall() or []
+        except Exception as exc:
+            message = str(exc).lower()
+            if "workspace_task_records" in message and ("doesn't exist" in message or "no such table" in message):
+                return []
+            self.database._raise_schema_hint_if_needed(exc)
+            raise
+
+        results: list[dict[str, Any]] = []
+        for row in rows:
+            get = (lambda key: row[key]) if isinstance(row, dict) or hasattr(row, "keys") else None
+            payload: dict[str, Any] = {}
+            for index, column in enumerate(TASK_DB_COLUMNS):
+                value = get(column) if get else row[index]
+                if column == "participants" and isinstance(value, str):
+                    try:
+                        value = json.loads(value)
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+                payload[column] = value
+            results.append(payload)
+        return results
+
     def load_task_records_from_table(
         self,
         workspace_id: str,

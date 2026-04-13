@@ -269,6 +269,17 @@ class StoryRecord:
 
 
 @dataclass
+class TaskHistoryProfile:
+    member_name: str
+    total_tasks: int = 0
+    design_coding_tasks: int = 0
+    module_path_counts: dict[str, int] = field(default_factory=dict)
+    story_task_counts: dict[str, int] = field(default_factory=dict)
+    avg_actual_vs_planned: float = 0.0
+    total_defects: int = 0
+
+
+@dataclass
 class TaskRecord:
     task_code: str
     story_code: str
