@@ -1,2 +1,3 @@
 /frontend/node_modules/*
-.venv
+/.venv/
+/.pm_agent_store/
