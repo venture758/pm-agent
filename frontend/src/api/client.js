@@ -118,6 +118,9 @@ export const apiClient = {
   listConfirmationRecords(workspaceId, page = 1, pageSize = 20) {
     return request(`/api/workspaces/${workspaceId}/confirmations${buildQuery({ page, pageSize })}`);
   },
+  listStories(workspaceId, page = 1, pageSize = 20, keyword = null) {
+    return request(`/api/workspaces/${workspaceId}/stories${buildQuery({ page, pageSize, keyword })}`);
+  },
   uploadModuleKnowledge(workspaceId, file) {
     const formData = new FormData();
     formData.append("file", file);

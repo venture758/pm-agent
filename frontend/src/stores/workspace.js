@@ -72,6 +72,21 @@ export const useWorkspaceStore = defineStore("workspace", {
       total: 0,
       total_pages: 0,
     },
+    storyPagination: {
+      items: [],
+      page: 1,
+      page_size: 20,
+      total: 0,
+      total_pages: 0,
+      keyword: "",
+    },
+    taskPagination: {
+      items: [],
+      page: 1,
+      page_size: 20,
+      total: 0,
+      total_pages: 0,
+    },
     loading: false,
     error: "",
   }),
@@ -312,7 +327,38 @@ export const useWorkspaceStore = defineStore("workspace", {
       this.loading = true;
       try {
         const payload = await apiClient.getTasks(this.workspaceId, query);
-        this.taskList = payload.tasks || [];
+        this.taskPagination = {
+          items: payload.items || [],
+          page: payload.page || 1,
+          page_size: payload.page_size || 20,
+          total: payload.total || 0,
+          total_pages: payload.total_pages || 0,
+        };
+        this.error = "";
+      } catch (error) {
+        this.error = error.message;
+        throw error;
+      } finally {
+        this.loading = false;
+      }
+    },
+    async loadStories(page = 1, keyword = "") {
+      this.loading = true;
+      try {
+        const payload = await apiClient.listStories(
+          this.workspaceId,
+          page,
+          this.storyPagination.page_size,
+          keyword || undefined,
+        );
+        this.storyPagination = {
+          items: payload.items || [],
+          page: payload.page || 1,
+          page_size: payload.page_size || 20,
+          total: payload.total || 0,
+          total_pages: payload.total_pages || 0,
+          keyword: keyword || "",
+        };
         this.error = "";
       } catch (error) {
         this.error = error.message;

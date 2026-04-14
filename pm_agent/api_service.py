@@ -465,6 +465,26 @@ class WorkspaceService:
         self.workspaces.save_workspace(workspace)
         return self._build_workspace_payload(workspace)
 
+    def list_stories(
+        self,
+        workspace_id: str,
+        page: int = 1,
+        page_size: int = 20,
+        keyword: str | None = None,
+    ) -> dict[str, Any]:
+        items, total = self.workspaces.load_story_records_paginated(
+            workspace_id, page, page_size, keyword=keyword,
+        )
+        total_pages = max(1, (total + page_size - 1) // page_size)
+        return {
+            "workspace_id": workspace_id,
+            "items": _jsonable(items),
+            "page": page,
+            "page_size": page_size,
+            "total": total,
+            "total_pages": total_pages,
+        }
+
     def get_tasks(
         self,
         workspace_id: str,
@@ -475,17 +495,24 @@ class WorkspaceService:
         status = normalize_text(query.get("status")) or None
         project_name = normalize_text(query.get("project_name")) or None
 
-        table_rows = self.workspaces.load_task_records_from_table(
+        page = int(query.get("page") or 1)
+        page_size = int(query.get("pageSize") or 20)
+        items, total = self.workspaces.load_task_records_from_table(
             workspace_id,
             owner=owner,
             status=status,
             project_name=project_name,
+            page=page,
+            page_size=page_size,
         )
-        tasks = [row_to_task_record(item) for item in table_rows]
+        total_pages = max(1, (total + page_size - 1) // page_size)
         return {
             "workspace_id": workspace_id,
-            "tasks": _jsonable(tasks),
-            "total": len(tasks),
+            "items": _jsonable(items),
+            "page": page,
+            "page_size": page_size,
+            "total": total,
+            "total_pages": total_pages,
         }
 
     def get_monitoring(self, workspace_id: str) -> dict[str, Any]:

@@ -533,6 +533,62 @@ class WorkspaceStore:
 
         return created_count, updated_count
 
+    def load_story_records_paginated(
+        self,
+        workspace_id: str,
+        page: int = 1,
+        page_size: int = 20,
+        keyword: str | None = None,
+    ) -> tuple[list[dict[str, Any]], int]:
+        """分页查询故事记录，按 modified_time DESC, user_story_code 排序。返回 (items, total_count)。"""
+        ph = self.database.placeholder
+        base_conditions = [f"workspace_id = {ph}"]
+        params: list[Any] = [workspace_id]
+
+        if keyword:
+            base_conditions.append(f"(user_story_code LIKE {ph} OR user_story_name LIKE {ph})")
+            like_kw = f"%{keyword}%"
+            params.extend([like_kw, like_kw])
+
+        where_clause = " AND ".join(base_conditions)
+        select_columns = ", ".join(STORY_DB_COLUMNS)
+        count_sql = f"SELECT COUNT(*) FROM workspace_story_records WHERE {where_clause}"
+        data_sql = f"SELECT {select_columns} FROM workspace_story_records WHERE {where_clause} ORDER BY modified_time DESC, user_story_code"
+        if self.database.scheme == "sqlite":
+            data_sql += " LIMIT ? OFFSET ?"
+        else:
+            data_sql += " LIMIT %s OFFSET %s"
+
+        offset = max(page - 1, 0) * page_size
+
+        try:
+            with self.database.connection() as connection:
+                cursor = connection.cursor()
+                cursor.execute(count_sql, params)
+                row = cursor.fetchone()
+                total = int(row[0] if isinstance(row, tuple) else row[0]) if row else 0
+
+                if total == 0:
+                    return [], 0
+
+                cursor.execute(data_sql, params + [page_size, offset])
+                rows = cursor.fetchall() or []
+        except Exception as exc:
+            message = str(exc).lower()
+            if "workspace_story_records" in message and ("doesn't exist" in message or "no such table" in message):
+                return [], 0
+            self.database._raise_schema_hint_if_needed(exc)
+            raise
+
+        results: list[dict[str, Any]] = []
+        for row in rows:
+            get = (lambda key: row[key]) if isinstance(row, dict) or hasattr(row, "keys") else None
+            payload: dict[str, Any] = {}
+            for index, column in enumerate(STORY_DB_COLUMNS):
+                payload[column] = get(column) if get else row[index]
+            results.append(payload)
+        return results, total
+
     def load_story_records_from_table(self, workspace_id: str) -> list[dict[str, Any]]:
         select_columns = ", ".join(STORY_DB_COLUMNS)
         sql = (
@@ -693,7 +749,9 @@ class WorkspaceStore:
         owner: str | None = None,
         status: str | None = None,
         project_name: str | None = None,
-    ) -> list[dict[str, Any]]:
+        page: int | None = None,
+        page_size: int | None = None,
+    ) -> tuple[list[dict[str, Any]], int] | list[dict[str, Any]]:
         select_columns = ", ".join(TASK_DB_COLUMNS)
         conditions = [f"workspace_id = {self.database.placeholder}"]
         params: list[Any] = [workspace_id]
@@ -709,16 +767,41 @@ class WorkspaceStore:
             params.append(project_name)
 
         where_clause = " AND ".join(conditions)
-        sql = f"SELECT {select_columns} FROM workspace_task_records WHERE {where_clause} ORDER BY modified_time DESC, task_code"
+
+        use_pagination = page is not None and page_size is not None
+        if use_pagination:
+            count_sql = f"SELECT COUNT(*) FROM workspace_task_records WHERE {where_clause}"
+
+        order_clause = " ORDER BY modified_time DESC, task_code"
+        if use_pagination:
+            if self.database.scheme == "sqlite":
+                order_clause += " LIMIT ? OFFSET ?"
+            else:
+                order_clause += " LIMIT %s OFFSET %s"
+
+        sql = f"SELECT {select_columns} FROM workspace_task_records WHERE {where_clause}{order_clause}"
 
         try:
             with self.database.connection() as connection:
                 cursor = connection.cursor()
-                cursor.execute(sql, params)
+                if use_pagination:
+                    offset = max(page - 1, 0) * page_size
+                    cursor.execute(count_sql, params)
+                    row = cursor.fetchone()
+                    total = int(row[0] if isinstance(row, tuple) else row[0]) if row else 0
+
+                    if total == 0:
+                        return [], 0
+
+                    cursor.execute(sql, params + [page_size, offset])
+                else:
+                    cursor.execute(sql, params)
                 rows = cursor.fetchall() or []
         except Exception as exc:
             message = str(exc).lower()
             if "workspace_task_records" in message and ("doesn't exist" in message or "no such table" in message):
+                if use_pagination:
+                    return [], 0
                 return []
             self.database._raise_schema_hint_if_needed(exc)
             raise
@@ -736,6 +819,8 @@ class WorkspaceStore:
                         pass
                 payload[column] = value
             results.append(payload)
+        if use_pagination:
+            return results, total
         return results
 
     def _sorted_members(self, members: list[MemberProfile]) -> list[MemberProfile]:

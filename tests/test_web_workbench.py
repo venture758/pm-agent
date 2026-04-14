@@ -941,6 +941,133 @@ class WebWorkbenchTest(unittest.TestCase):
             self.assertEqual(0, total)
             self.assertEqual([], items)
 
+    def test_story_pagination_default(self) -> None:
+        """GET /api/workspaces/:id/stories returns paginated response with default page=1, pageSize=20."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app = create_api_app(store_root=tmpdir)
+            # Insert story records directly via database
+            store = app.service.workspaces
+            with store.database.connection() as conn:
+                cursor = conn.cursor()
+                for i in range(25):
+                    cursor.execute(
+                        "INSERT INTO workspace_story_records ("
+                        "workspace_id, user_story_code, user_story_name, modified_time, imported_at, updated_at"
+                        ") VALUES (?, ?, ?, ?, ?, ?)",
+                        ("ws1", f"US-{i:03d}", f"Story {i}", f"2026-01-{(i % 28) + 1:02d}", "2026-01-01", "2026-01-01"),
+                    )
+            status, payload = self._request(app, "GET", "/api/workspaces/ws1/stories")
+            self.assertTrue(status.startswith("200"))
+            self.assertEqual(25, payload["total"])
+            self.assertEqual(1, payload["page"])
+            self.assertEqual(20, payload["page_size"])
+            self.assertEqual(2, payload["total_pages"])
+            self.assertEqual(20, len(payload["items"]))
+
+    def test_story_pagination_keyword_filter(self) -> None:
+        """Keyword filter on stories endpoint returns matching records."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app = create_api_app(store_root=tmpdir)
+            store = app.service.workspaces
+            with store.database.connection() as conn:
+                cursor = conn.cursor()
+                for i in range(10):
+                    cursor.execute(
+                        "INSERT INTO workspace_story_records ("
+                        "workspace_id, user_story_code, user_story_name, modified_time, imported_at, updated_at"
+                        ") VALUES (?, ?, ?, ?, ?, ?)",
+                        ("ws1", f"US-{i:03d}", f"Story {i}", "2026-01-01", "2026-01-01", "2026-01-01"),
+                    )
+            status, payload = self._request(app, "GET", "/api/workspaces/ws1/stories?keyword=US-005")
+            self.assertTrue(status.startswith("200"))
+            self.assertEqual(1, payload["total"])
+            self.assertEqual(1, len(payload["items"]))
+
+    def test_story_pagination_empty_workspace(self) -> None:
+        """Empty workspace returns zero total."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app = create_api_app(store_root=tmpdir)
+            status, payload = self._request(app, "GET", "/api/workspaces/empty-ws/stories")
+            self.assertTrue(status.startswith("200"))
+            self.assertEqual(0, payload["total"])
+            self.assertEqual(1, payload["total_pages"])
+            self.assertEqual([], payload["items"])
+
+    def test_story_pagination_out_of_range(self) -> None:
+        """Out-of-range page returns empty items."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app = create_api_app(store_root=tmpdir)
+            store = app.service.workspaces
+            with store.database.connection() as conn:
+                cursor = conn.cursor()
+                for i in range(5):
+                    cursor.execute(
+                        "INSERT INTO workspace_story_records ("
+                        "workspace_id, user_story_code, user_story_name, modified_time, imported_at, updated_at"
+                        ") VALUES (?, ?, ?, ?, ?, ?)",
+                        ("ws1", f"US-{i:03d}", f"Story {i}", "2026-01-01", "2026-01-01", "2026-01-01"),
+                    )
+            status, payload = self._request(app, "GET", "/api/workspaces/ws1/stories?page=999&pageSize=20")
+            self.assertTrue(status.startswith("200"))
+            self.assertEqual(5, payload["total"])
+            self.assertEqual([], payload["items"])
+
+    def test_task_pagination_returns_paginated_response(self) -> None:
+        """GET /api/workspaces/:id/tasks with page/pageSize returns paginated response."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app = create_api_app(store_root=tmpdir)
+            # Insert task records directly via database
+            store = app.service.workspaces
+            with store.database.connection() as conn:
+                cursor = conn.cursor()
+                for i in range(25):
+                    owner = "李祥" if i < 10 else "王海林"
+                    status = "进行中" if i < 15 else "已完成"
+                    cursor.execute(
+                        "INSERT INTO workspace_task_records ("
+                        "workspace_id, task_code, name, owner, status, project_name, "
+                        "modified_time, imported_at, updated_at"
+                        ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        ("ws1", f"TK-{i:03d}", f"Task {i}", owner, status, f"项目{i % 3}",
+                         "2026-01-01", "2026-01-01", "2026-01-01"),
+                    )
+
+            status, payload = self._request(app, "GET", "/api/workspaces/ws1/tasks?page=1&pageSize=10")
+            self.assertTrue(status.startswith("200"))
+            self.assertIn("items", payload)
+            self.assertEqual(25, payload["total"])
+            self.assertEqual(1, payload["page"])
+            self.assertEqual(10, payload["page_size"])
+            self.assertEqual(3, payload["total_pages"])
+            self.assertEqual(10, len(payload["items"]))
+
+    def test_task_pagination_with_filters(self) -> None:
+        """Task pagination combined with owner/status filters."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app = create_api_app(store_root=tmpdir)
+            store = app.service.workspaces
+            with store.database.connection() as conn:
+                cursor = conn.cursor()
+                for i in range(15):
+                    owner = "李祥" if i < 5 else ("王海林" if i < 10 else "余萍")
+                    status = "进行中" if i < 8 else "已完成"
+                    cursor.execute(
+                        "INSERT INTO workspace_task_records ("
+                        "workspace_id, task_code, name, owner, status, project_name, "
+                        "modified_time, imported_at, updated_at"
+                        ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        ("ws1", f"TK-{i:03d}", f"Task {i}", owner, status, "项目A",
+                         "2026-01-01", "2026-01-01", "2026-01-01"),
+                    )
+
+            status, payload = self._request(
+                app, "GET",
+                "/api/workspaces/ws1/tasks?page=1&pageSize=10&owner=李祥&status=进行中",
+            )
+            self.assertTrue(status.startswith("200"))
+            self.assertEqual(5, payload["total"])
+            self.assertEqual(5, len(payload["items"]))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -25,6 +25,7 @@ def _unquote_utf8(text: str) -> str:
 
 
 from .api_service import WorkspaceService
+from .utils import normalize_text
 
 logger = logging.getLogger(__name__)
 
@@ -102,6 +103,13 @@ class ApiApplication:
             page = int(self._read_query(environ).get("page") or 1)
             page_size = int(self._read_query(environ).get("pageSize") or 20)
             return 200, self.service.list_confirmation_records(workspace_id, page, page_size)
+        if len(segments) == 4 and segments[3] == "stories" and method == "GET":
+            page = int(self._read_query(environ).get("page") or 1)
+            page_size = int(self._read_query(environ).get("pageSize") or 20)
+            keyword = normalize_text(self._read_query(environ).get("keyword")) or None
+            return 200, self.service.list_stories(workspace_id, page, page_size, keyword=keyword)
+        if len(segments) == 4 and segments[3] == "tasks" and method == "GET":
+            return 200, self.service.get_tasks(workspace_id, self._read_query(environ))
         if len(segments) == 4 and segments[3] == "confirmations" and method == "POST":
             payload = self._read_json_body(environ)
             return 200, self.service.confirm_assignments(workspace_id, payload.get("actions") or {})
@@ -144,8 +152,6 @@ class ApiApplication:
                 workspace_id,
                 (task_file["filename"], task_file["content"]),
             )
-        if len(segments) == 4 and segments[3] == "tasks" and method == "GET":
-            return 200, self.service.get_tasks(workspace_id, self._read_query(environ))
         if len(segments) == 4 and segments[3] == "monitoring" and method == "GET":
             return 200, self.service.get_monitoring(workspace_id)
         if len(segments) == 4 and segments[3] == "insights" and method == "GET":

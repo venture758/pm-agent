@@ -11,7 +11,6 @@ const taskFilterOwner = ref("");
 const taskFilterStatus = ref("");
 const taskFilterProject = ref("");
 
-// Tab state
 const TABS = [
   { key: "stories", label: "故事管理" },
   { key: "tasks", label: "任务管理" },
@@ -65,7 +64,6 @@ const STORY_COLUMNS = [
   { key: "change_type", label: "变动类型" },
 ];
 
-// Primary (visible by default) and secondary columns for story table
 const STORY_PRIMARY_KEYS = new Set([
   "sequence_no", "user_story_code", "user_story_name", "user_story_tag",
   "status", "priority", "planned_person_days", "owner_names",
@@ -107,12 +105,16 @@ const TASK_PRIMARY_KEYS = new Set([
 ]);
 const TASK_SECONDARY_COLUMNS = TASK_COLUMNS.filter((c) => !TASK_PRIMARY_KEYS.has(c.key));
 
-// Data
-const stories = computed(() => workspaceStore.workspace.handoff.stories || []);
-const tasks = computed(() => {
-  if (workspaceStore.taskList && workspaceStore.taskList.length > 0) return workspaceStore.taskList;
-  return workspaceStore.workspace.handoff.tasks || [];
-});
+// Server-side paginated data
+const stories = computed(() => workspaceStore.storyPagination.items || []);
+const storyTotal = computed(() => workspaceStore.storyPagination.total || 0);
+const storyPage = computed(() => workspaceStore.storyPagination.page || 1);
+const storyTotalPages = computed(() => workspaceStore.storyPagination.total_pages || 1);
+
+const tasks = computed(() => workspaceStore.taskPagination.items || []);
+const taskTotal = computed(() => workspaceStore.taskPagination.total || 0);
+const taskPage = computed(() => workspaceStore.taskPagination.page || 1);
+const taskTotalPages = computed(() => workspaceStore.taskPagination.total_pages || 1);
 
 // Story management state
 const storySearch = ref("");
@@ -146,17 +148,9 @@ const activeFilterCount = computed(() => {
   return n;
 });
 
+// Client-side sort on current page
 const visibleStories = computed(() => {
-  const keyword = storySearch.value.trim().toLowerCase();
-  let rows = stories.value.filter((s) => {
-    if (storyPriorityFilter.value && String(resolveStoryCell(s, "priority") || "") !== storyPriorityFilter.value) return false;
-    if (!keyword) return true;
-    return STORY_COLUMNS
-      .map((column) => String(resolveStoryCell(s, column.key) || ""))
-      .join(" ")
-      .toLowerCase()
-      .includes(keyword);
-  });
+  let rows = stories.value;
   if (storySortKey.value) {
     rows = [...rows].sort((a, b) => {
       const va = String(resolveStoryCell(a, storySortKey.value) || "").toLowerCase();
@@ -182,28 +176,43 @@ function sortIndicator(key) {
   return storySortOrder.value === "asc" ? " ↑" : " ↓";
 }
 
+function applyStoryFilters() {
+  storySortKey.value = "";
+  workspaceStore.loadStories(1, storySearch.value.trim() || undefined);
+}
+
 function resetStoryFilters() {
   storySearch.value = "";
   storyPriorityFilter.value = "";
   storySortKey.value = "";
   storySortOrder.value = "asc";
+  workspaceStore.loadStories(1);
 }
 
+function goToStoryPage(page) {
+  workspaceStore.loadStories(page, storySearch.value.trim() || undefined);
+}
+
+// Page range computation for pagination buttons
+const storyPageRange = computed(() => {
+  const total = storyTotalPages.value;
+  const current = storyPage.value;
+  if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1);
+  const pages = [];
+  pages.push(1);
+  if (current > 3) pages.push("...");
+  const start = Math.max(2, current - 1);
+  const end = Math.min(total - 1, current + 1);
+  for (let i = start; i <= end; i++) pages.push(i);
+  if (current < total - 2) pages.push("...");
+  pages.push(total);
+  return pages;
+});
+
 // Task management state
-const taskSearch = ref("");
 const taskSortKey = ref("");
 const taskSortOrder = ref("asc");
 const taskShowAllColumns = ref(false);
-
-const taskOwnerOptions = computed(() =>
-  [...new Set(tasks.value.map((t) => String(t.owner || "").trim()).filter(Boolean))].sort(),
-);
-const taskStatusOptions = computed(() =>
-  [...new Set(tasks.value.map((t) => String(t.status || "").trim()).filter(Boolean))].sort(),
-);
-const taskProjectOptions = computed(() =>
-  [...new Set(tasks.value.map((t) => String(t.project_name || "").trim()).filter(Boolean))].sort(),
-);
 
 function resolveTaskCell(task, key) {
   if (key === "participants") {
@@ -219,23 +228,12 @@ const taskActiveFilterCount = computed(() => {
   if (taskFilterOwner.value) n++;
   if (taskFilterStatus.value) n++;
   if (taskFilterProject.value) n++;
-  if (taskSearch.value.trim()) n++;
   return n;
 });
 
+// Client-side sort on current page
 const visibleTasks = computed(() => {
-  const keyword = taskSearch.value.trim().toLowerCase();
-  let rows = tasks.value.filter((t) => {
-    if (taskFilterOwner.value && String(t.owner || "") !== taskFilterOwner.value) return false;
-    if (taskFilterStatus.value && String(t.status || "") !== taskFilterStatus.value) return false;
-    if (taskFilterProject.value && String(t.project_name || "") !== taskFilterProject.value) return false;
-    if (!keyword) return true;
-    return TASK_COLUMNS
-      .map((column) => String(resolveTaskCell(t, column.key) || ""))
-      .join(" ")
-      .toLowerCase()
-      .includes(keyword);
-  });
+  let rows = tasks.value;
   if (taskSortKey.value) {
     rows = [...rows].sort((a, b) => {
       const va = String(resolveTaskCell(a, taskSortKey.value) || "").toLowerCase();
@@ -266,6 +264,8 @@ async function applyTaskFilters() {
     owner: taskFilterOwner.value || undefined,
     status: taskFilterStatus.value || undefined,
     project_name: taskFilterProject.value || undefined,
+    page: 1,
+    pageSize: workspaceStore.taskPagination.page_size || 20,
   });
 }
 
@@ -273,9 +273,33 @@ function resetTaskFilters() {
   taskFilterOwner.value = "";
   taskFilterStatus.value = "";
   taskFilterProject.value = "";
-  taskSearch.value = "";
-  workspaceStore.loadTasks();
+  workspaceStore.loadTasks({ page: 1, pageSize: workspaceStore.taskPagination.page_size || 20 });
 }
+
+function goToTaskPage(page) {
+  workspaceStore.loadTasks({
+    owner: taskFilterOwner.value || undefined,
+    status: taskFilterStatus.value || undefined,
+    project_name: taskFilterProject.value || undefined,
+    page,
+    pageSize: workspaceStore.taskPagination.page_size || 20,
+  });
+}
+
+const taskPageRange = computed(() => {
+  const total = taskTotalPages.value;
+  const current = taskPage.value;
+  if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1);
+  const pages = [];
+  pages.push(1);
+  if (current > 3) pages.push("...");
+  const start = Math.max(2, current - 1);
+  const end = Math.min(total - 1, current + 1);
+  for (let i = start; i <= end; i++) pages.push(i);
+  if (current < total - 2) pages.push("...");
+  pages.push(total);
+  return pages;
+});
 
 function fileStatus(file, label) {
   if (!file) return { text: `待上传 ${label}`, status: "empty" };
@@ -293,23 +317,25 @@ async function importStoryOnly() {
   if (!storyOnlyFile.value) return;
   await workspaceStore.uploadStoryOnly(storyOnlyFile.value);
   storyOnlyFile.value = null;
+  workspaceStore.loadStories(1);
 }
 
 async function importTaskOnly() {
   if (!taskOnlyFile.value) return;
   await workspaceStore.uploadTaskOnly(taskOnlyFile.value);
-  await workspaceStore.loadTasks();
+  await workspaceStore.loadTasks({ page: 1, pageSize: workspaceStore.taskPagination.page_size || 20 });
   taskOnlyFile.value = null;
 }
 
 watch(activeTab, (tab) => {
   if (tab === "tasks") {
-    workspaceStore.loadTasks();
+    workspaceStore.loadTasks({ page: 1, pageSize: 20 });
   }
 });
 
 onMounted(() => {
-  workspaceStore.loadTasks();
+  workspaceStore.loadStories(1);
+  workspaceStore.loadTasks({ page: 1, pageSize: 20 });
 });
 </script>
 
@@ -325,8 +351,8 @@ onMounted(() => {
         @click="activeTab = tab.key"
       >
         <span>{{ tab.label }}</span>
-        <span v-if="tab.key === 'stories'" class="tab-badge">{{ stories.length }}</span>
-        <span v-else-if="tab.key === 'tasks'" class="tab-badge">{{ tasks.length }}</span>
+        <span v-if="tab.key === 'stories'" class="tab-badge">{{ storyTotal }}</span>
+        <span v-else-if="tab.key === 'tasks'" class="tab-badge">{{ taskTotal }}</span>
       </button>
     </nav>
 
@@ -343,9 +369,9 @@ onMounted(() => {
             v-model="storySearch"
             type="text"
             class="strip-input"
-            placeholder="搜索故事编码、名称、负责人…"
+            placeholder="搜索故事编码、名称…"
+            @keyup.enter="applyStoryFilters"
           />
-          <kbd v-if="!storySearch" class="strip-kbd">⌘K</kbd>
         </div>
 
         <div class="strip-chips">
@@ -442,7 +468,19 @@ onMounted(() => {
       <!-- ====== Data Table ====== -->
       <div class="table-frame">
         <div class="table-head-bar">
-          <span class="table-count">{{ visibleStories.length }} / {{ stories.length }} 条</span>
+          <span class="table-count">{{ visibleStories.length }} / 共 {{ storyTotal }} 条，第 {{ storyPage }}/{{ storyTotalPages }} 页</span>
+          <div class="pagination" v-if="storyTotalPages > 1">
+            <button class="pagination-btn" :disabled="storyPage <= 1" @click="goToStoryPage(storyPage - 1)">‹</button>
+            <button
+              v-for="p in storyPageRange"
+              :key="p"
+              class="pagination-btn"
+              :class="{ 'pagination-btn--active': p === storyPage }"
+              :disabled="p === storyPage || p === '...'"
+              @click="typeof p === 'number' && goToStoryPage(p)"
+            >{{ p }}</button>
+            <button class="pagination-btn" :disabled="storyPage >= storyTotalPages" @click="goToStoryPage(storyPage + 1)">›</button>
+          </div>
         </div>
         <div v-if="visibleStories.length" class="table-wrap">
           <table class="data-tbl story-tbl">
@@ -478,28 +516,15 @@ onMounted(() => {
             <rect x="10" y="6" width="44" height="52" rx="4" />
             <path d="M20 20h24M20 30h24M20 40h16" />
           </svg>
-          <p>{{ stories.length ? "当前筛选条件下无数据" : "暂无故事数据，请先上传故事列表 Excel" }}</p>
+          <p>{{ storyTotal ? "无更多故事数据" : "暂无故事数据，请先上传故事列表 Excel" }}</p>
         </div>
       </div>
     </div>
 
     <!-- Tab 2: Task Management -->
     <div v-show="activeTab === 'tasks'" class="tab-panel">
-      <!-- ====== Command Strip: Search + Filters ====== -->
+      <!-- ====== Command Strip ====== -->
       <div class="command-strip">
-        <div class="strip-search">
-          <svg class="strip-icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <circle cx="11" cy="11" r="8" />
-            <line x1="21" y1="21" x2="16.65" y2="16.65" />
-          </svg>
-          <input
-            v-model="taskSearch"
-            type="text"
-            class="strip-input"
-            placeholder="搜索任务编号、名称、负责人…"
-          />
-        </div>
-
         <div class="strip-chips">
           <!-- Owner filter chip -->
           <div class="chip-dropdown">
@@ -644,7 +669,19 @@ onMounted(() => {
       <!-- ====== Data Table ====== -->
       <div class="table-frame">
         <div class="table-head-bar">
-          <span class="table-count">{{ visibleTasks.length }} / {{ tasks.length }} 条</span>
+          <span class="table-count">{{ visibleTasks.length }} / 共 {{ taskTotal }} 条，第 {{ taskPage }}/{{ taskTotalPages }} 页</span>
+          <div class="pagination" v-if="taskTotalPages > 1">
+            <button class="pagination-btn" :disabled="taskPage <= 1" @click="goToTaskPage(taskPage - 1)">‹</button>
+            <button
+              v-for="p in taskPageRange"
+              :key="p"
+              class="pagination-btn"
+              :class="{ 'pagination-btn--active': p === taskPage }"
+              :disabled="p === taskPage || p === '...'"
+              @click="typeof p === 'number' && goToTaskPage(p)"
+            >{{ p }}</button>
+            <button class="pagination-btn" :disabled="taskPage >= taskTotalPages" @click="goToTaskPage(taskPage + 1)">›</button>
+          </div>
         </div>
         <div v-if="visibleTasks.length" class="table-wrap">
           <table class="data-tbl task-tbl">
@@ -680,7 +717,7 @@ onMounted(() => {
             <rect x="10" y="6" width="44" height="52" rx="4" />
             <path d="M20 20h24M20 30h24M20 40h16" />
           </svg>
-          <p>{{ tasks.length ? "当前筛选条件下无数据" : "暂无任务数据，请先上传任务列表 Excel" }}</p>
+          <p>{{ taskTotal ? "无更多任务数据" : "暂无任务数据，请先上传任务列表 Excel" }}</p>
         </div>
       </div>
     </div>
@@ -1183,6 +1220,47 @@ onMounted(() => {
   font-weight: 700;
   color: #627284;
   letter-spacing: 0.02em;
+}
+
+.pagination {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.pagination-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 28px;
+  height: 28px;
+  padding: 0 6px;
+  border: 1px solid rgba(23, 32, 42, 0.1);
+  border-radius: 6px;
+  background: transparent;
+  color: #627284;
+  font-family: 'Source Sans 3', 'PingFang SC', sans-serif;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.pagination-btn:hover:not(:disabled) {
+  background: rgba(186, 92, 61, 0.08);
+  border-color: #ba5c3d;
+  color: #ba5c3d;
+}
+
+.pagination-btn--active {
+  background: #ba5c3d;
+  border-color: #ba5c3d;
+  color: #fff;
+}
+
+.pagination-btn:disabled {
+  opacity: 0.3;
+  cursor: default;
 }
 
 .table-wrap {
