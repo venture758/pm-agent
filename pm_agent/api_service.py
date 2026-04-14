@@ -111,7 +111,7 @@ class WorkspaceService:
         # 加载任务历史用于 LLM 成员上下文
         task_records = self.workspaces.load_task_records_by_workspace_id(workspace_id)
         task_history = aggregate_task_history(task_records)
-        requirements, reply = self.agent.parse_requirements_with_llm(user_message, profiles, task_history=task_history)
+        requirements, reply = self.agent.parse_requirements_with_llm(user_message, profiles, task_history=task_history, task_records=task_records)
         logger.info("[chat] LLM 返回完成 workspace_id=%s 需求数=%d reply_len=%d", workspace_id, len(requirements), len(reply))
 
         # Append assistant reply
@@ -278,7 +278,7 @@ class WorkspaceService:
         # 加载任务历史用于推荐评分
         task_records = self.workspaces.load_task_records_by_workspace_id(workspace_id)
         task_history = aggregate_task_history(task_records)
-        recommendations = self.agent.recommend(requirements, members, task_history=task_history)
+        recommendations = self.agent.recommend(requirements, members, task_history=task_history, task_records=task_records)
         workspace.normalized_requirements = self._merge_workspace_requirements(
             workspace.normalized_requirements,
             requirements,

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from pm_agent.assignment import aggregate_task_history, confirm_assignments, recommend_assignments
+from pm_agent.assignment import aggregate_task_history, aggregate_workload_from_tasks, confirm_assignments, recommend_assignments
 from pm_agent.models import MemberProfile, ModuleKnowledgeEntry, RequirementItem, TaskHistoryProfile
 
 
@@ -89,6 +89,79 @@ class AssignmentTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AggregateWorkloadFromTasksTest(unittest.TestCase):
+    def test_calculate_workload_from_incomplete_tasks(self) -> None:
+        """Only "计划" and "进行中" tasks should count toward workload."""
+        records = [
+            {"owner": "张三", "status": "计划", "planned_person_days": 1.0},
+            {"owner": "张三", "status": "进行中", "planned_person_days": 0.5},
+            {"owner": "李四", "status": "计划", "planned_person_days": 0.3},
+        ]
+        members = [
+            MemberProfile(name="张三", workload=0.0, capacity=1.0),
+            MemberProfile(name="李四", workload=0.0, capacity=1.0),
+        ]
+        workloads = aggregate_workload_from_tasks(records, members)
+        self.assertAlmostEqual(1.5, workloads["张三"])
+        self.assertAlmostEqual(0.3, workloads["李四"])
+
+    def test_completed_tasks_excluded(self) -> None:
+        """Completed tasks should not count toward workload."""
+        records = [
+            {"owner": "张三", "status": "已完成", "planned_person_days": 2.0},
+            {"owner": "张三", "status": "计划", "planned_person_days": 1.0},
+        ]
+        members = [MemberProfile(name="张三", workload=0.0, capacity=1.0)]
+        workloads = aggregate_workload_from_tasks(records, members)
+        self.assertAlmostEqual(1.0, workloads["张三"])
+
+    def test_fallback_to_manual_workload(self) -> None:
+        """Members with no task records should use manual workload."""
+        records = [
+            {"owner": "张三", "status": "计划", "planned_person_days": 1.0},
+        ]
+        members = [
+            MemberProfile(name="张三", workload=0.0, capacity=1.0),
+            MemberProfile(name="李四", workload=0.5, capacity=1.0),
+        ]
+        workloads = aggregate_workload_from_tasks(records, members)
+        self.assertAlmostEqual(1.0, workloads["张三"])
+        self.assertAlmostEqual(0.5, workloads["李四"])
+
+    def test_empty_owner_skipped(self) -> None:
+        """Records with empty owner should be skipped."""
+        records = [
+            {"owner": "", "status": "计划", "planned_person_days": 1.0},
+            {"owner": None, "status": "计划", "planned_person_days": 0.5},
+            {"owner": "  ", "status": "进行中", "planned_person_days": 0.3},
+        ]
+        members = [MemberProfile(name="张三", workload=0.0, capacity=1.0)]
+        workloads = aggregate_workload_from_tasks(records, members)
+        # Only fallback to manual value
+        self.assertAlmostEqual(0.0, workloads["张三"])
+
+    def test_zero_planned_person_days(self) -> None:
+        """Tasks with planned_person_days=0 should not contribute."""
+        records = [
+            {"owner": "张三", "status": "计划", "planned_person_days": 0},
+            {"owner": "张三", "status": "进行中", "planned_person_days": None},
+        ]
+        members = [MemberProfile(name="张三", workload=0.0, capacity=1.0)]
+        workloads = aggregate_workload_from_tasks(records, members)
+        # No task records with positive planned_person_days, so fallback to manual
+        self.assertAlmostEqual(0.0, workloads["张三"])
+
+    def test_no_records_fallback_all_manual(self) -> None:
+        """When no task records exist, all members use manual workload."""
+        members = [
+            MemberProfile(name="张三", workload=0.3, capacity=1.0),
+            MemberProfile(name="李四", workload=0.7, capacity=1.0),
+        ]
+        workloads = aggregate_workload_from_tasks([], members)
+        self.assertAlmostEqual(0.3, workloads["张三"])
+        self.assertAlmostEqual(0.7, workloads["李四"])
 
 
 class AggregateTaskHistoryTest(unittest.TestCase):

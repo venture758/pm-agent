@@ -31,11 +31,13 @@ from .knowledge_base import (
     update_module_knowledge_after_assignment,
 )
 from .llm_client import LlmClient
+from .assignment import aggregate_workload_from_tasks, recommend_assignments
+from .llm_client import LlmClient
 from .models import AgentState, AssignmentRecommendation, ConfirmedAssignment, MemberProfile, RequirementItem
 from .monitoring import generate_execution_alerts
 from .platform_sync import sync_platform_exports
 from .storage import LocalStateStore
-from .utils import normalize_requirement_id
+from .utils import normalize_name, normalize_requirement_id
 from .validators import (
     validate_confirmed_assignments,
     validate_import_batch,
@@ -115,9 +117,10 @@ class ProjectManagerAgent:
         requirements: list[RequirementItem],
         members: Optional[list[MemberProfile]] = None,
         task_history: Optional[Mapping[str, object]] = None,
+        task_records: Optional[list[dict[str, object]]] = None,
     ) -> list[AssignmentRecommendation]:
         profiles = members or self.build_member_profiles()
-        recommendations = recommend_assignments(requirements, profiles, self.state.module_entries, task_history=task_history)
+        recommendations = recommend_assignments(requirements, profiles, self.state.module_entries, task_history=task_history, task_records=task_records)
         validate_recommendations(recommendations)
         return recommendations
 
@@ -177,12 +180,31 @@ class ProjectManagerAgent:
         user_message: str,
         members: Optional[list[MemberProfile]] = None,
         task_history: Optional[Mapping[str, object]] = None,
+        task_records: Optional[list[dict[str, object]]] = None,
     ) -> tuple[list[RequirementItem], str]:
         """需求理解 Agent：调用 LLM 解析用户消息，返回 RequirementItem 列表和自然语言回复。"""
         if not self._llm:
             raise RuntimeError("LLM 未配置：请设置 --nvidia-api-key 或 NVIDIA_NIM_API_KEY")
 
         profiles = members or self.build_member_profiles()
+
+        # Apply auto-workload to profiles before building LLM context
+        auto_workloads = aggregate_workload_from_tasks(task_records or [], profiles) if task_records else None
+        if auto_workloads is not None:
+            profiles = [
+                MemberProfile(
+                    name=m.name,
+                    role=m.role,
+                    skills=list(m.skills),
+                    experience_level=m.experience_level,
+                    workload=auto_workloads.get(m.name, auto_workloads.get(normalize_name(m.name), m.workload)),
+                    capacity=m.capacity,
+                    constraints=list(m.constraints),
+                    module_familiarity=dict(m.module_familiarity),
+                )
+                for m in profiles
+            ]
+
         logger.info("[chat.llm] 构建上下文 member_count=%d module_count=%d", len(profiles), len(self.state.module_entries))
         module_context = build_module_context(self.state.module_entries.values())
         member_context = build_member_context(profiles, task_history=task_history)

@@ -556,7 +556,7 @@ class WebWorkbenchTest(unittest.TestCase):
                 },
             )
 
-            def fake_parse(_message: str, _members, task_history=None):
+            def fake_parse(_message: str, _members, task_history=None, task_records=None):
                 requirements = [
                     RequirementItem(
                         requirement_id="CHAT-1",

@@ -69,6 +69,35 @@ def aggregate_task_history(
     return profiles
 
 
+_INCOMPLETE_STATUSES = {"计划", "进行中"}
+
+
+def aggregate_workload_from_tasks(
+    task_records: list[dict[str, Any]],
+    members: list[MemberProfile],
+) -> dict[str, float]:
+    """从任务明细表计算每位成员的当前负载（未完成 planned_person_days 总和）。"""
+    workloads: dict[str, float] = {}
+
+    for record in task_records:
+        owner = str(record.get("owner") or "").strip()
+        if not owner:
+            continue
+        status = str(record.get("status") or "").strip()
+        if status not in _INCOMPLETE_STATUSES:
+            continue
+        planned = float(record.get("planned_person_days") or 0.0)
+        if planned > 0:
+            workloads[owner] = workloads.get(owner, 0.0) + planned
+
+    # Fallback to manual value for members with no task records
+    for member in members:
+        if normalize_name(member.name) not in {normalize_name(k) for k in workloads}:
+            workloads[member.name] = member.workload
+
+    return workloads
+
+
 def _member_score(
     requirement: RequirementItem,
     member: MemberProfile,
@@ -155,14 +184,35 @@ def recommend_assignments(
     members: Iterable[MemberProfile],
     module_lookup: Mapping[str, ModuleKnowledgeEntry],
     task_history: Optional[Mapping[str, TaskHistoryProfile]] = None,
+    task_records: Optional[list[dict[str, Any]]] = None,
 ) -> list[AssignmentRecommendation]:
     member_list = list(members)
+    # Auto-calculate workload from task records
+    auto_workloads = aggregate_workload_from_tasks(task_records or [], member_list) if task_records else None
+
+    # Build profiles with auto-workload applied via shallow copy
+    scored_members: list[MemberProfile] = []
+    for member in member_list:
+        if auto_workloads is not None:
+            auto_wl = auto_workloads.get(member.name, auto_workloads.get(normalize_name(member.name), member.workload))
+            member = MemberProfile(
+                name=member.name,
+                role=member.role,
+                skills=list(member.skills),
+                experience_level=member.experience_level,
+                workload=auto_wl,
+                capacity=member.capacity,
+                constraints=list(member.constraints),
+                module_familiarity=dict(member.module_familiarity),
+            )
+        scored_members.append(member)
+
     recommendations: list[AssignmentRecommendation] = []
     for requirement in requirements:
         matched_module = module_lookup.get(requirement.matched_module_keys[0]) if requirement.matched_module_keys else None
         dev_candidates: list[tuple[MemberProfile, float, list[str]]] = []
         test_candidates: list[tuple[MemberProfile, float, list[str]]] = []
-        for member in member_list:
+        for member in scored_members:
             tp = (task_history or {}).get(member.name) if task_history else None
             score, reasons = _member_score(requirement, member, matched_module, task_profile=tp)
             if member.role in {"qa", "tester", "test"}:
