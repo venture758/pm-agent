@@ -65,6 +65,13 @@ export const useWorkspaceStore = defineStore("workspace", {
     },
     insightHistory: [],
     insightSummary: null,
+    confirmationHistory: {
+      items: [],
+      page: 1,
+      page_size: 20,
+      total: 0,
+      total_pages: 0,
+    },
     loading: false,
     error: "",
   }),
@@ -348,6 +355,29 @@ export const useWorkspaceStore = defineStore("workspace", {
       } catch (error) {
         this.error = error.message;
         throw error;
+      }
+    },
+    async loadConfirmationHistory(page = 1) {
+      this.loading = true;
+      try {
+        const payload = await apiClient.listConfirmationRecords(
+          this.workspaceId,
+          page,
+          this.confirmationHistory.page_size,
+        );
+        this.confirmationHistory = {
+          items: payload.items || [],
+          page: payload.page || 1,
+          page_size: payload.page_size || 20,
+          total: payload.total || 0,
+          total_pages: payload.total_pages || 0,
+        };
+        this.error = "";
+      } catch (error) {
+        this.error = error.message;
+        throw error;
+      } finally {
+        this.loading = false;
       }
     },
     async sendChatMessage(message) {

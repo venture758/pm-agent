@@ -6,6 +6,7 @@ import PersonnelManagementView from "../views/PersonnelManagementView.vue";
 import RecommendationsView from "../views/RecommendationsView.vue";
 import DeliveryView from "../views/DeliveryView.vue";
 import MonitoringView from "../views/MonitoringView.vue";
+import ConfirmationHistoryView from "../views/ConfirmationHistoryView.vue";
 import InsightsView from "../views/InsightsView.vue";
 
 const routes = [
@@ -42,6 +43,11 @@ const routes = [
     path: "/workspaces/:workspaceId/monitoring",
     name: "monitoring",
     component: MonitoringView,
+  },
+  {
+    path: "/workspaces/:workspaceId/confirmations",
+    name: "confirmations",
+    component: ConfirmationHistoryView,
   },
   {
     path: "/workspaces/:workspaceId/insights",

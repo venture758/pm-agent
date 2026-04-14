@@ -6,6 +6,8 @@ import { useWorkspaceStore } from "../stores/workspace";
 const workspaceStore = useWorkspaceStore();
 const actions = reactive({});
 
+const activeTab = ref("recommendations");
+
 const searchKeyword = ref("");
 const moduleFilter = ref("");
 const ownerFilter = ref("");
@@ -183,7 +185,6 @@ async function submitConfirmations() {
   selectedIds.value = [];
 }
 
-// Filter status for active badge display
 const activeFilterCount = computed(() => {
   let n = 0;
   if (searchKeyword.value.trim()) n++;
@@ -218,16 +219,17 @@ onUnmounted(() => {
 
 <template>
   <section class="recommendations-page">
-    <!-- Page header with title + submit -->
+    <!-- Page head with tab bar -->
     <div class="page-head">
-      <div>
+      <div class="page-head-left">
         <p class="section-kicker">Recommendation Console</p>
         <h2 class="page-title">推荐确认</h2>
       </div>
       <div class="head-right">
         <span v-if="isMobileReadonly" class="soft-tag soft-tag-light">移动端仅浏览</span>
-        <span v-if="recommendations.length" class="rec-count-badge">{{ recommendations.length }} 条推荐</span>
+        <span v-if="recommendations.length && activeTab === 'recommendations'" class="rec-count-badge">{{ recommendations.length }} 条推荐</span>
         <button
+          v-if="activeTab === 'recommendations'"
           class="submit-btn"
           data-test="submit-confirm"
           :disabled="!canSubmit"
@@ -238,245 +240,443 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <p v-if="!recommendations.length" class="header-hint">先在需求输入页面生成推荐。</p>
-
-    <!-- Command strip: search + filter chips -->
-    <div v-if="recommendations.length" class="command-strip">
-      <div class="strip-search">
-        <svg class="strip-icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <circle cx="11" cy="11" r="8" />
-          <line x1="21" y1="21" x2="16.65" y2="16.65" />
+    <!-- Tab bar -->
+    <div class="tab-bar">
+      <button
+        class="tab-item"
+        :class="{ 'tab-item--active': activeTab === 'recommendations' }"
+        @click="activeTab = 'recommendations'"
+      >
+        <svg class="tab-icon" viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3 4h14M3 10h14M3 16h10" />
         </svg>
-        <input
-          v-model="searchKeyword"
-          type="text"
-          class="strip-input"
-          placeholder="搜索标题、编号、模块、负责人…"
-        />
+        推荐分配
+        <span v-if="recommendations.length" class="tab-count">{{ recommendations.length }}</span>
+      </button>
+      <button
+        class="tab-item"
+        :class="{ 'tab-item--active': activeTab === 'history' }"
+        @click="activeTab = 'history'"
+      >
+        <svg class="tab-icon" viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="10" cy="10" r="7" />
+          <path d="M10 6v4l3 2" />
+        </svg>
+        确认历史
+        <span v-if="workspaceStore.confirmationHistory.total" class="tab-count tab-count--muted">{{ workspaceStore.confirmationHistory.total }}</span>
+      </button>
+    </div>
+
+    <!-- ====== Tab: Recommendations ====== -->
+    <div v-show="activeTab === 'recommendations'" class="tab-content">
+      <p v-if="!recommendations.length" class="header-hint">先在需求输入页面生成推荐。</p>
+
+      <!-- Command strip: search + filter chips -->
+      <div v-if="recommendations.length" class="command-strip">
+        <div class="strip-search">
+          <svg class="strip-icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="11" cy="11" r="8" />
+            <line x1="21" y1="21" x2="16.65" y2="16.65" />
+          </svg>
+          <input
+            v-model="searchKeyword"
+            type="text"
+            class="strip-input"
+            placeholder="搜索标题、编号、模块、负责人…"
+          />
+        </div>
+
+        <div class="strip-chips">
+          <div class="chip-dropdown">
+            <button class="chip-btn" :class="{ 'chip-btn--active': moduleFilter }">
+              <span class="chip-label">模块</span>
+              <span class="chip-value">{{ moduleFilter || '全部' }}</span>
+              <svg class="chip-arrow" viewBox="0 0 12 8" width="12" height="8"><path d="M1 1l5 5 5-5" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round"/></svg>
+            </button>
+            <div class="chip-menu">
+              <button class="chip-menu-item" :class="{ 'chip-menu-item--active': !moduleFilter }" @click="moduleFilter = ''">全部</button>
+              <button
+                v-for="moduleName in moduleOptions"
+                :key="moduleName"
+                class="chip-menu-item"
+                :class="{ 'chip-menu-item--active': moduleFilter === moduleName }"
+                @click="moduleFilter = moduleName"
+              >
+                {{ moduleName }}
+              </button>
+            </div>
+          </div>
+
+          <div class="chip-dropdown">
+            <button class="chip-btn" :class="{ 'chip-btn--active': ownerFilter }">
+              <span class="chip-label">负责人</span>
+              <span class="chip-value">{{ ownerFilter || '全部' }}</span>
+              <svg class="chip-arrow" viewBox="0 0 12 8" width="12" height="8"><path d="M1 1l5 5 5-5" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round"/></svg>
+            </button>
+            <div class="chip-menu">
+              <button class="chip-menu-item" :class="{ 'chip-menu-item--active': !ownerFilter }" @click="ownerFilter = ''">全部</button>
+              <button
+                v-for="owner in ownerOptions"
+                :key="owner"
+                class="chip-menu-item"
+                :class="{ 'chip-menu-item--active': ownerFilter === owner }"
+                @click="ownerFilter = owner"
+              >
+                {{ owner }}
+              </button>
+            </div>
+          </div>
+
+          <div class="chip-dropdown">
+            <button class="chip-btn" :class="{ 'chip-btn--active': statusFilter !== 'all' }">
+              <span class="chip-label">状态</span>
+              <span class="chip-value">{{ { all: '全部', assigned: '已分配', unassigned: '未分配' }[statusFilter] }}</span>
+              <svg class="chip-arrow" viewBox="0 0 12 8" width="12" height="8"><path d="M1 1l5 5 5-5" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round"/></svg>
+            </button>
+            <div class="chip-menu">
+              <button class="chip-menu-item" :class="{ 'chip-menu-item--active': statusFilter === 'all' }" @click="statusFilter = 'all'">全部</button>
+              <button class="chip-menu-item" :class="{ 'chip-menu-item--active': statusFilter === 'assigned' }" @click="statusFilter = 'assigned'">已分配</button>
+              <button class="chip-menu-item" :class="{ 'chip-menu-item--active': statusFilter === 'unassigned' }" @click="statusFilter = 'unassigned'">未分配</button>
+            </div>
+          </div>
+
+          <div class="chip-dropdown">
+            <button class="chip-btn chip-btn--sort">
+              <span class="chip-label">排序</span>
+              <span class="chip-value">{{ { confidence_desc: '置信度', title_asc: '标题', module_asc: '模块', owner_asc: '负责人' }[sortBy] }}</span>
+              <svg class="chip-arrow" viewBox="0 0 12 8" width="12" height="8"><path d="M1 1l5 5 5-5" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round"/></svg>
+            </button>
+            <div class="chip-menu">
+              <button class="chip-menu-item" :class="{ 'chip-menu-item--active': sortBy === 'confidence_desc' }" @click="sortBy = 'confidence_desc'">按置信度</button>
+              <button class="chip-menu-item" :class="{ 'chip-menu-item--active': sortBy === 'title_asc' }" @click="sortBy = 'title_asc'">按标题</button>
+              <button class="chip-menu-item" :class="{ 'chip-menu-item--active': sortBy === 'module_asc' }" @click="sortBy = 'module_asc'">按模块</button>
+              <button class="chip-menu-item" :class="{ 'chip-menu-item--active': sortBy === 'owner_asc' }" @click="sortBy = 'owner_asc'">按负责人</button>
+            </div>
+          </div>
+
+          <span v-if="moduleFilter" class="filter-badge">
+            {{ moduleFilter }}
+            <button class="filter-badge-x" @click="moduleFilter = ''">×</button>
+          </span>
+          <span v-if="ownerFilter" class="filter-badge">
+            {{ ownerFilter }}
+            <button class="filter-badge-x" @click="ownerFilter = ''">×</button>
+          </span>
+          <span v-if="statusFilter !== 'all'" class="filter-badge">
+            {{ { assigned: '已分配', unassigned: '未分配' }[statusFilter] }}
+            <button class="filter-badge-x" @click="statusFilter = 'all'">×</button>
+          </span>
+
+          <button
+            v-if="activeFilterCount > 0"
+            class="strip-reset"
+            @click="resetFilters"
+          >
+            清除筛选
+          </button>
+        </div>
       </div>
 
-      <div class="strip-chips">
-        <!-- Module chip -->
-        <div class="chip-dropdown">
-          <button class="chip-btn" :class="{ 'chip-btn--active': moduleFilter }">
-            <span class="chip-label">模块</span>
-            <span class="chip-value">{{ moduleFilter || '全部' }}</span>
-            <svg class="chip-arrow" viewBox="0 0 12 8" width="12" height="8"><path d="M1 1l5 5 5-5" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round"/></svg>
-          </button>
-          <div class="chip-menu">
-            <button class="chip-menu-item" :class="{ 'chip-menu-item--active': !moduleFilter }" @click="moduleFilter = ''">全部</button>
-            <button
-              v-for="moduleName in moduleOptions"
-              :key="moduleName"
-              class="chip-menu-item"
-              :class="{ 'chip-menu-item--active': moduleFilter === moduleName }"
-              @click="moduleFilter = moduleName"
-            >
-              {{ moduleName }}
+      <!-- Result count bar -->
+      <div v-if="recommendations.length" class="count-bar">
+        <span class="count-text">{{ visibleRows.length }} / {{ recommendations.length }} 条</span>
+        <span v-if="overview.unassigned > 0" class="count-warn">
+          <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor"><circle cx="8" cy="8" r="7" fill="none" stroke="currentColor" stroke-width="1.5"/><line x1="8" y1="5" x2="8" y2="9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="8" cy="11.5" r="0.8"/></svg>
+          {{ overview.unassigned }} 未分配
+        </span>
+      </div>
+
+      <!-- Recommendation table -->
+      <article v-if="recommendations.length" class="rec-table-area">
+        <div v-if="!visibleRows.length" class="empty-state">当前筛选条件下无数据。</div>
+
+        <div v-else class="table-frame">
+          <table class="rec-table">
+            <thead>
+              <tr>
+                <th class="th th--id">需求编号</th>
+                <th class="th th--title">标题</th>
+                <th class="th th--module">模块</th>
+                <th class="th th--conf">置信度</th>
+                <th class="th th--owner">开发</th>
+                <th class="th th--owner">测试</th>
+                <th class="th th--status">状态</th>
+                <th class="th th--action">操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              <template
+                v-for="(row, idx) in visibleRows"
+                :key="row.id"
+              >
+                <tr
+                  class="tr"
+                  :style="{ '--row-index': idx }"
+                  :class="{ 'tr--unassigned': !!row.recommendation.unassigned_reason }"
+                >
+                  <td class="td td--id">{{ row.id }}</td>
+                  <td class="td td--title">
+                    <span class="title-text">{{ row.recommendation.title }}</span>
+                    <button class="expand-btn" @click="toggleExpand(row.id)">
+                      {{ expandedRows.has(row.id) ? '收起' : '展开' }}
+                    </button>
+                  </td>
+                  <td class="td td--module">{{ row.recommendation.module_name || "未命中" }}</td>
+                  <td class="td td--conf">
+                    <span class="conf-pill" :class="confClass(row.recommendation.confidence)">
+                      {{ Number(row.recommendation.confidence || 0).toFixed(2) }}
+                    </span>
+                  </td>
+                  <td class="td td--owner">{{ row.recommendation.development_owner || "—" }}</td>
+                  <td class="td td--owner">{{ row.recommendation.testing_owner || "—" }}</td>
+                  <td class="td td--status">
+                    <span v-if="row.recommendation.unassigned_reason" class="tag-unassigned">未分配</span>
+                    <span v-else class="tag-assigned">已分配</span>
+                  </td>
+                  <td class="td td--action">
+                    <button class="ghost-btn sm" data-test="row-delete" @click="markDeleted(row.id)">删除</button>
+                  </td>
+                </tr>
+                <tr v-if="expandedRows.has(row.id)" class="tr-expand" :key="`${row.id}-expand`">
+                  <td :colspan="8">
+                    <div class="expand-body">
+                      <div class="expand-actions">
+                        <label class="ef">
+                          <span>动作</span>
+                          <select v-model="ensureAction(row.id, row.recommendation).action" :disabled="isMobileReadonly">
+                            <option value="accept">直接采纳</option>
+                            <option value="reassign">改派负责人</option>
+                            <option value="split">拆分需求</option>
+                            <option value="add-collaborator">添加协作人</option>
+                          </select>
+                        </label>
+                        <label class="ef">
+                          <span>开发负责人</span>
+                          <input v-model="ensureAction(row.id, row.recommendation).development_owner" :disabled="isMobileReadonly" />
+                        </label>
+                        <label class="ef">
+                          <span>测试负责人</span>
+                          <input v-model="ensureAction(row.id, row.recommendation).testing_owner" :disabled="isMobileReadonly" />
+                        </label>
+                        <label class="ef">
+                          <span>备选负责人</span>
+                          <input v-model="ensureAction(row.id, row.recommendation).backup_owner" :disabled="isMobileReadonly" />
+                        </label>
+                        <label class="ef ef--wide">
+                          <span>协作人</span>
+                          <input v-model="ensureAction(row.id, row.recommendation).collaborators_text" :disabled="isMobileReadonly" placeholder="张三, 李四" />
+                        </label>
+                        <label class="ef ef--wide">
+                          <span>拆分建议</span>
+                          <input v-model="ensureAction(row.id, row.recommendation).split_suggestion" :disabled="isMobileReadonly" />
+                        </label>
+                      </div>
+
+                      <div class="expand-details">
+                        <details class="detail-group">
+                          <summary>推荐依据（{{ row.recommendation.reasons?.length || 0 }}）</summary>
+                          <ul class="reason-list">
+                            <li v-for="reason in row.recommendation.reasons" :key="reason">{{ reason }}</li>
+                            <li v-if="row.recommendation.unassigned_reason">{{ row.recommendation.unassigned_reason }}</li>
+                          </ul>
+                        </details>
+                        <details class="detail-group">
+                          <summary>负载快照</summary>
+                          <div v-if="Object.keys(row.recommendation.workload_snapshot || {}).length" class="snapshot-list">
+                            <div v-for="(value, member) in row.recommendation.workload_snapshot" :key="member" class="snapshot-row">
+                              <span>{{ member }}</span>
+                              <strong>{{ Number(value).toFixed(2) }}</strong>
+                            </div>
+                          </div>
+                          <p v-else class="rec-empty">暂无负载快照。</p>
+                        </details>
+                      </div>
+                    </div>
+                  </td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+        </div>
+      </article>
+    </div>
+
+    <!-- ====== Tab: Confirmation History ====== -->
+    <div v-show="activeTab === 'history'" class="tab-content">
+      <ConfirmationHistoryPanel />
+    </div>
+  </section>
+</template>
+
+<script>
+import { computed, onMounted, ref } from "vue";
+import { useWorkspaceStore } from "../stores/workspace";
+
+const ConfirmationHistoryPanel = {
+  name: "ConfirmationHistoryPanel",
+  setup() {
+    const workspaceStore = useWorkspaceStore();
+    const expandedSessions = ref(new Set());
+
+    const historyItems = computed(() => workspaceStore.confirmationHistory.items || []);
+    const pagination = computed(() => ({
+      page: workspaceStore.confirmationHistory.page || 1,
+      pageSize: workspaceStore.confirmationHistory.page_size || 20,
+      total: workspaceStore.confirmationHistory.total || 0,
+      totalPages: workspaceStore.confirmationHistory.total_pages || 0,
+    }));
+
+    function toggleExpand(sessionId) {
+      if (expandedSessions.value.has(sessionId)) {
+        expandedSessions.value.delete(sessionId);
+      } else {
+        expandedSessions.value.add(sessionId);
+      }
+    }
+
+    function isExpanded(sessionId) {
+      return expandedSessions.value.has(sessionId);
+    }
+
+    function formatTime(isoString) {
+      if (!isoString) return "";
+      const d = new Date(isoString);
+      return d.toLocaleString("zh-CN", {
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+    }
+
+    function goToPage(page) {
+      if (page < 1 || page > pagination.value.totalPages) return;
+      workspaceStore.loadConfirmationHistory(page);
+      expandedSessions.value.clear();
+    }
+
+    function refreshHistory() {
+      workspaceStore.loadConfirmationHistory(pagination.value.page);
+    }
+
+    onMounted(() => {
+      workspaceStore.loadConfirmationHistory(1);
+    });
+
+    return {
+      workspaceStore,
+      expandedSessions,
+      historyItems,
+      pagination,
+      toggleExpand,
+      isExpanded,
+      formatTime,
+      goToPage,
+      refreshHistory,
+    };
+  },
+  template: `
+    <section class="history-panel">
+      <!-- History header -->
+      <article class="history-header">
+        <div class="history-header-content">
+          <div>
+            <p class="history-kicker">Archive</p>
+            <h3 class="history-title">确认历史</h3>
+          </div>
+          <div class="history-actions">
+            <span class="history-stat">{{ pagination.total }} 条记录</span>
+            <button class="history-refresh" :disabled="workspaceStore.loading" @click="refreshHistory">
+              <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M2 8a6 6 0 0 1 10.47-4M14 8a6 6 0 0 1-10.47 4"/>
+                <path d="M12 1v3h-3M4 15v-3h3"/>
+              </svg>
+              刷新
             </button>
           </div>
         </div>
+        <p class="history-hint">查看已确认的分配记录，按确认时间倒序排列。</p>
+      </article>
 
-        <!-- Owner chip -->
-        <div class="chip-dropdown">
-          <button class="chip-btn" :class="{ 'chip-btn--active': ownerFilter }">
-            <span class="chip-label">负责人</span>
-            <span class="chip-value">{{ ownerFilter || '全部' }}</span>
-            <svg class="chip-arrow" viewBox="0 0 12 8" width="12" height="8"><path d="M1 1l5 5 5-5" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round"/></svg>
-          </button>
-          <div class="chip-menu">
-            <button class="chip-menu-item" :class="{ 'chip-menu-item--active': !ownerFilter }" @click="ownerFilter = ''">全部</button>
-            <button
-              v-for="owner in ownerOptions"
-              :key="owner"
-              class="chip-menu-item"
-              :class="{ 'chip-menu-item--active': ownerFilter === owner }"
-              @click="ownerFilter = owner"
-            >
-              {{ owner }}
-            </button>
-          </div>
-        </div>
-
-        <!-- Status chip -->
-        <div class="chip-dropdown">
-          <button class="chip-btn" :class="{ 'chip-btn--active': statusFilter !== 'all' }">
-            <span class="chip-label">状态</span>
-            <span class="chip-value">{{ { all: '全部', assigned: '已分配', unassigned: '未分配' }[statusFilter] }}</span>
-            <svg class="chip-arrow" viewBox="0 0 12 8" width="12" height="8"><path d="M1 1l5 5 5-5" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round"/></svg>
-          </button>
-          <div class="chip-menu">
-            <button class="chip-menu-item" :class="{ 'chip-menu-item--active': statusFilter === 'all' }" @click="statusFilter = 'all'">全部</button>
-            <button class="chip-menu-item" :class="{ 'chip-menu-item--active': statusFilter === 'assigned' }" @click="statusFilter = 'assigned'">已分配</button>
-            <button class="chip-menu-item" :class="{ 'chip-menu-item--active': statusFilter === 'unassigned' }" @click="statusFilter = 'unassigned'">未分配</button>
-          </div>
-        </div>
-
-        <!-- Sort chip -->
-        <div class="chip-dropdown">
-          <button class="chip-btn chip-btn--sort">
-            <span class="chip-label">排序</span>
-            <span class="chip-value">{{ { confidence_desc: '置信度', title_asc: '标题', module_asc: '模块', owner_asc: '负责人' }[sortBy] }}</span>
-            <svg class="chip-arrow" viewBox="0 0 12 8" width="12" height="8"><path d="M1 1l5 5 5-5" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round"/></svg>
-          </button>
-          <div class="chip-menu">
-            <button class="chip-menu-item" :class="{ 'chip-menu-item--active': sortBy === 'confidence_desc' }" @click="sortBy = 'confidence_desc'">按置信度</button>
-            <button class="chip-menu-item" :class="{ 'chip-menu-item--active': sortBy === 'title_asc' }" @click="sortBy = 'title_asc'">按标题</button>
-            <button class="chip-menu-item" :class="{ 'chip-menu-item--active': sortBy === 'module_asc' }" @click="sortBy = 'module_asc'">按模块</button>
-            <button class="chip-menu-item" :class="{ 'chip-menu-item--active': sortBy === 'owner_asc' }" @click="sortBy = 'owner_asc'">按负责人</button>
-          </div>
-        </div>
-
-        <!-- Active filter badges -->
-        <span v-if="moduleFilter" class="filter-badge">
-          {{ moduleFilter }}
-          <button class="filter-badge-x" @click="moduleFilter = ''">×</button>
-        </span>
-        <span v-if="ownerFilter" class="filter-badge">
-          {{ ownerFilter }}
-          <button class="filter-badge-x" @click="ownerFilter = ''">×</button>
-        </span>
-        <span v-if="statusFilter !== 'all'" class="filter-badge">
-          {{ { assigned: '已分配', unassigned: '未分配' }[statusFilter] }}
-          <button class="filter-badge-x" @click="statusFilter = 'all'">×</button>
-        </span>
-
-        <!-- Reset -->
-        <button
-          v-if="activeFilterCount > 0"
-          class="strip-reset"
-          @click="resetFilters"
-        >
-          清除筛选
-        </button>
-      </div>
-    </div>
-
-    <!-- Result count bar -->
-    <div v-if="recommendations.length" class="count-bar">
-      <span class="count-text">{{ visibleRows.length }} / {{ recommendations.length }} 条</span>
-      <span v-if="overview.unassigned > 0" class="count-warn">
-        <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor"><circle cx="8" cy="8" r="7" fill="none" stroke="currentColor" stroke-width="1.5"/><line x1="8" y1="5" x2="8" y2="9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="8" cy="11.5" r="0.8"/></svg>
-        {{ overview.unassigned }} 未分配
-      </span>
-    </div>
-
-    <!-- Recommendation table -->
-    <article v-if="recommendations.length" class="rec-table-area">
-      <div v-if="!visibleRows.length" class="empty-state">当前筛选条件下无数据。</div>
-
-      <div v-else class="table-frame">
-        <table class="rec-table">
+      <!-- History table -->
+      <article v-if="historyItems.length" class="history-table-wrap">
+        <table class="history-table">
           <thead>
             <tr>
-              <th class="th th--id">需求编号</th>
-              <th class="th th--title">标题</th>
-              <th class="th th--module">模块</th>
-              <th class="th th--conf">置信度</th>
-              <th class="th th--owner">开发</th>
-              <th class="th th--owner">测试</th>
-              <th class="th th--status">状态</th>
-              <th class="th th--action">操作</th>
+              <th class="h-col-expand"></th>
+              <th class="h-col-time">确认时间</th>
+              <th class="h-col-session">Session ID</th>
+              <th class="h-col-count">确认数</th>
             </tr>
           </thead>
           <tbody>
-            <template
-              v-for="(row, idx) in visibleRows"
-              :key="row.id"
-            >
-              <tr
-                class="tr"
-                :style="{ '--row-index': idx }"
-                :class="{ 'tr--unassigned': !!row.recommendation.unassigned_reason }"
-              >
-                <td class="td td--id">{{ row.id }}</td>
-                <td class="td td--title">
-                  <span class="title-text">{{ row.recommendation.title }}</span>
-                  <button class="expand-btn" @click="toggleExpand(row.id)">
-                    {{ expandedRows.has(row.id) ? '收起' : '展开' }}
-                  </button>
+            <template v-for="item in historyItems" :key="item.session_id">
+              <tr class="h-summary-row" @click="toggleExpand(item.session_id)">
+                <td class="h-col-expand">
+                  <svg class="h-chevron" :class="{ expanded: isExpanded(item.session_id) }" viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M7 5l5 5-5 5" />
+                  </svg>
                 </td>
-                <td class="td td--module">{{ row.recommendation.module_name || "未命中" }}</td>
-                <td class="td td--conf">
-                  <span class="conf-pill" :class="confClass(row.recommendation.confidence)">
-                    {{ Number(row.recommendation.confidence || 0).toFixed(2) }}
-                  </span>
-                </td>
-                <td class="td td--owner">{{ row.recommendation.development_owner || "—" }}</td>
-                <td class="td td--owner">{{ row.recommendation.testing_owner || "—" }}</td>
-                <td class="td td--status">
-                  <span v-if="row.recommendation.unassigned_reason" class="tag-unassigned">未分配</span>
-                  <span v-else class="tag-assigned">已分配</span>
-                </td>
-                <td class="td td--action">
-                  <button class="ghost-btn sm" data-test="row-delete" @click="markDeleted(row.id)">删除</button>
+                <td class="h-col-time">{{ formatTime(item.created_at) }}</td>
+                <td class="h-col-session">{{ item.session_id }}</td>
+                <td class="h-col-count">
+                  <span class="h-count-badge">{{ item.confirmed_count }}</span>
                 </td>
               </tr>
-              <!-- Expandable row: action fields + details -->
-              <tr v-if="expandedRows.has(row.id)" class="tr-expand" :key="`${row.id}-expand`">
-                <td :colspan="8">
-                  <div class="expand-body">
-                    <div class="expand-actions">
-                      <label class="ef">
-                        <span>动作</span>
-                        <select v-model="ensureAction(row.id, row.recommendation).action" :disabled="isMobileReadonly">
-                          <option value="accept">直接采纳</option>
-                          <option value="reassign">改派负责人</option>
-                          <option value="split">拆分需求</option>
-                          <option value="add-collaborator">添加协作人</option>
-                        </select>
-                      </label>
-                      <label class="ef">
-                        <span>开发负责人</span>
-                        <input v-model="ensureAction(row.id, row.recommendation).development_owner" :disabled="isMobileReadonly" />
-                      </label>
-                      <label class="ef">
-                        <span>测试负责人</span>
-                        <input v-model="ensureAction(row.id, row.recommendation).testing_owner" :disabled="isMobileReadonly" />
-                      </label>
-                      <label class="ef">
-                        <span>备选负责人</span>
-                        <input v-model="ensureAction(row.id, row.recommendation).backup_owner" :disabled="isMobileReadonly" />
-                      </label>
-                      <label class="ef ef--wide">
-                        <span>协作人</span>
-                        <input v-model="ensureAction(row.id, row.recommendation).collaborators_text" :disabled="isMobileReadonly" placeholder="张三, 李四" />
-                      </label>
-                      <label class="ef ef--wide">
-                        <span>拆分建议</span>
-                        <input v-model="ensureAction(row.id, row.recommendation).split_suggestion" :disabled="isMobileReadonly" />
-                      </label>
-                    </div>
-
-                    <div class="expand-details">
-                      <details class="detail-group">
-                        <summary>推荐依据（{{ row.recommendation.reasons?.length || 0 }}）</summary>
-                        <ul class="reason-list">
-                          <li v-for="reason in row.recommendation.reasons" :key="reason">{{ reason }}</li>
-                          <li v-if="row.recommendation.unassigned_reason">{{ row.recommendation.unassigned_reason }}</li>
-                        </ul>
-                      </details>
-                      <details class="detail-group">
-                        <summary>负载快照</summary>
-                        <div v-if="Object.keys(row.recommendation.workload_snapshot || {}).length" class="snapshot-list">
-                          <div v-for="(value, member) in row.recommendation.workload_snapshot" :key="member" class="snapshot-row">
-                            <span>{{ member }}</span>
-                            <strong>{{ Number(value).toFixed(2) }}</strong>
-                          </div>
-                        </div>
-                        <p v-else class="rec-empty">暂无负载快照。</p>
-                      </details>
-                    </div>
+              <tr v-if="isExpanded(item.session_id)" class="h-detail-row">
+                <td :colspan="4">
+                  <div class="h-detail-panel">
+                    <table class="h-detail-table">
+                      <thead>
+                        <tr>
+                          <th>需求 ID</th>
+                          <th>标题</th>
+                          <th>开发负责人</th>
+                          <th>测试负责人</th>
+                          <th>B角</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        <tr v-for="assignment in item.confirmed_assignments" :key="assignment.requirement_id">
+                          <td class="h-detail-id">{{ assignment.requirement_id }}</td>
+                          <td class="h-detail-title">{{ assignment.title }}</td>
+                          <td class="h-detail-owner">{{ assignment.development_owner }}</td>
+                          <td class="h-detail-owner">{{ assignment.testing_owner || "—" }}</td>
+                          <td class="h-detail-owner">{{ assignment.backup_owner || "—" }}</td>
+                        </tr>
+                      </tbody>
+                    </table>
                   </div>
                 </td>
               </tr>
             </template>
           </tbody>
         </table>
+      </article>
+
+      <!-- Pagination -->
+      <div v-if="pagination.totalPages > 1" class="h-pagination">
+        <button class="h-page-btn" :disabled="pagination.page <= 1" @click="goToPage(pagination.page - 1)">上一页</button>
+        <span class="h-page-info">{{ pagination.page }} / {{ pagination.totalPages }}</span>
+        <button class="h-page-btn" :disabled="pagination.page >= pagination.totalPages" @click="goToPage(pagination.page + 1)">下一页</button>
       </div>
-    </article>
-  </section>
-</template>
+
+      <!-- Empty state -->
+      <article v-else class="h-empty">
+        <svg viewBox="0 0 64 64" width="48" height="48" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="12" y="8" width="40" height="48" rx="4" />
+          <path d="M22 20h20M22 28h20M22 36h12" />
+        </svg>
+        <h4>暂无确认记录</h4>
+        <p>还没有确认过任何推荐分配。</p>
+      </article>
+    </section>
+  `,
+  styles: `
+  `,
+};
+</script>
 
 <style scoped>
 @import url('https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;600;700&display=swap');
@@ -484,7 +684,7 @@ onUnmounted(() => {
 .recommendations-page {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 0;
   animation: pageFadeIn 0.35s ease both;
 }
 
@@ -504,7 +704,12 @@ onUnmounted(() => {
   align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
-  padding: 4px 0;
+  padding: 4px 0 0 0;
+}
+
+.page-head-left {
+  display: flex;
+  flex-direction: column;
 }
 
 .page-title {
@@ -561,10 +766,88 @@ onUnmounted(() => {
   opacity: 0.55;
 }
 
+/* ====== Tab bar ====== */
+.tab-bar {
+  display: flex;
+  align-items: flex-end;
+  gap: 0;
+  margin-top: 16px;
+  border-bottom: 2px solid #eef1f5;
+  padding: 0 4px;
+}
+
+.tab-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 20px;
+  border: none;
+  background: transparent;
+  color: #627284;
+  font-family: 'Source Sans 3', 'PingFang SC', sans-serif;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  position: relative;
+  transition: color 0.2s ease;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -2px;
+}
+
+.tab-item:hover {
+  color: #213a4f;
+}
+
+.tab-item--active {
+  color: #17202a;
+  border-bottom-color: #ba5c3d;
+}
+
+.tab-icon {
+  opacity: 0.6;
+  transition: opacity 0.2s ease;
+}
+
+.tab-item--active .tab-icon {
+  opacity: 1;
+  color: #ba5c3d;
+}
+
+.tab-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  background: rgba(186, 92, 61, 0.12);
+  color: #ba5c3d;
+}
+
+.tab-count--muted {
+  background: rgba(33, 58, 79, 0.08);
+  color: #627284;
+}
+
+/* Tab content */
+.tab-content {
+  padding-top: 16px;
+  animation: tabFadeIn 0.3s ease both;
+}
+
+@keyframes tabFadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
 .header-hint {
   margin: 0;
   font-size: 13px;
   color: #8a9bab;
+  padding: 8px 0;
 }
 
 /* ====== Command Strip ====== */
@@ -1081,6 +1364,301 @@ onUnmounted(() => {
   color: #a0b0c0;
 }
 
+/* ====== History Panel ====== */
+.history-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.history-header {
+  padding: 16px 20px;
+  background: linear-gradient(135deg, rgba(238, 245, 255, 0.96) 0%, rgba(255, 255, 255, 0.94) 100%);
+  border-radius: 20px;
+  border: 1px solid rgba(23, 32, 42, 0.08);
+  box-shadow: 0 14px 42px rgba(28, 46, 64, 0.08);
+}
+
+.history-header-content {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 6px;
+}
+
+.history-kicker {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 700;
+  color: #8a9bab;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.history-title {
+  margin: 0;
+  font-size: 20px;
+  font-family: Georgia, "Times New Roman", serif;
+  color: #17202a;
+  letter-spacing: 0.01em;
+}
+
+.history-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.history-stat {
+  font-family: 'Source Sans 3', 'PingFang SC', sans-serif;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 4px 12px;
+  border-radius: 999px;
+  background: rgba(33, 58, 79, 0.08);
+  color: #213a4f;
+}
+
+.history-refresh {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border: 1px solid rgba(23, 32, 42, 0.12);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.9);
+  color: #213a4f;
+  font-family: 'Source Sans 3', 'PingFang SC', sans-serif;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.history-refresh:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 1);
+  box-shadow: 0 2px 8px rgba(28, 46, 64, 0.08);
+}
+
+.history-refresh:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.history-hint {
+  margin: 0;
+  font-size: 12px;
+  color: #8a9bab;
+  line-height: 1.5;
+}
+
+/* History table */
+.history-table-wrap {
+  background: rgba(255, 255, 255, 0.94);
+  border: 1px solid rgba(23, 32, 42, 0.08);
+  border-radius: 20px;
+  overflow: hidden;
+  box-shadow: 0 8px 28px rgba(28, 46, 64, 0.06);
+}
+
+.history-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.history-table thead tr {
+  background: rgba(33, 58, 79, 0.04);
+  border-bottom: 1px solid rgba(23, 32, 42, 0.08);
+}
+
+.history-table th {
+  padding: 10px 16px;
+  font-size: 11px;
+  font-weight: 700;
+  color: #627284;
+  text-align: left;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.h-summary-row {
+  border-bottom: 1px solid rgba(23, 32, 42, 0.06);
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.h-summary-row:hover {
+  background: rgba(33, 58, 79, 0.03);
+}
+
+.h-summary-row td {
+  padding: 12px 16px;
+  font-size: 13px;
+  color: #17202a;
+}
+
+.h-col-expand {
+  width: 36px;
+  text-align: center !important;
+}
+
+.h-col-time {
+  width: 150px;
+  white-space: nowrap;
+}
+
+.h-col-session {
+  font-family: 'SF Mono', 'Menlo', monospace;
+  font-size: 12px;
+  color: #4b5b6b;
+}
+
+.h-col-count {
+  width: 70px;
+  text-align: center !important;
+}
+
+.h-count-badge {
+  display: inline-block;
+  min-width: 22px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  background: rgba(33, 58, 79, 0.08);
+  color: #213a4f;
+  text-align: center;
+}
+
+.h-chevron {
+  transition: transform 0.2s ease;
+  color: #8a9bab;
+}
+
+.h-chevron.expanded {
+  transform: rotate(90deg);
+}
+
+/* History detail row */
+.h-detail-row td {
+  padding: 0;
+  background: rgba(245, 248, 252, 0.6);
+}
+
+.h-detail-panel {
+  padding: 14px 18px;
+}
+
+.h-detail-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.h-detail-table thead tr {
+  border-bottom: 1px solid rgba(23, 32, 42, 0.08);
+}
+
+.h-detail-table th {
+  padding: 7px 10px;
+  font-weight: 700;
+  color: #627284;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  text-align: left;
+}
+
+.h-detail-table td {
+  padding: 7px 10px;
+  border-bottom: 1px solid rgba(23, 32, 42, 0.04);
+}
+
+.h-detail-id {
+  font-family: 'SF Mono', 'Menlo', monospace;
+  font-size: 11px;
+  color: #8a9bab;
+}
+
+.h-detail-title {
+  color: #17202a;
+  font-weight: 500;
+}
+
+.h-detail-owner {
+  color: #4b5b6b;
+}
+
+/* History pagination */
+.h-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+}
+
+.h-page-btn {
+  padding: 7px 18px;
+  border-radius: 10px;
+  border: 1px solid rgba(23, 32, 42, 0.12);
+  background: rgba(255, 255, 255, 0.94);
+  color: #17202a;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.h-page-btn:hover:not(:disabled) {
+  background: rgba(33, 58, 79, 0.06);
+  border-color: rgba(23, 32, 42, 0.2);
+}
+
+.h-page-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.h-page-info {
+  font-size: 12px;
+  color: #8a9bab;
+  font-weight: 500;
+}
+
+/* History empty */
+.h-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 48px 20px;
+  background: rgba(255, 255, 255, 0.94);
+  border: 1px solid rgba(23, 32, 42, 0.08);
+  border-radius: 20px;
+  box-shadow: 0 14px 42px rgba(28, 46, 64, 0.07);
+  text-align: center;
+}
+
+.h-empty svg {
+  color: #c6d0dc;
+  opacity: 0.6;
+}
+
+.h-empty h4 {
+  margin: 0;
+  font-size: 16px;
+  font-family: Georgia, "Times New Roman", serif;
+  color: #17202a;
+}
+
+.h-empty p {
+  margin: 0;
+  font-size: 13px;
+  color: #8a9bab;
+}
+
 @media (max-width: 1180px) {
   .expand-actions {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1092,8 +1670,32 @@ onUnmounted(() => {
 }
 
 @media (max-width: 860px) {
-  .expand-actions {
+  .page-head {
+    flex-direction: column;
+  }
+
+  .command-strip {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .strip-chips {
+    justify-content: flex-start;
+  }
+
+  .expand-actions,
+  .expand-details {
     grid-template-columns: 1fr;
+  }
+
+  .tab-bar {
+    overflow-x: auto;
+  }
+
+  .tab-item {
+    padding: 10px 14px;
+    font-size: 13px;
+    white-space: nowrap;
   }
 }
 

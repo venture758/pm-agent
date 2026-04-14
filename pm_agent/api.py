@@ -98,6 +98,10 @@ class ApiApplication:
             return 200, self.service.batch_delete_recommendations(workspace_id, payload.get("requirement_ids") or [])
         if len(segments) == 5 and segments[3] == "recommendations" and method == "DELETE":
             return 200, self.service.delete_recommendation(workspace_id, _unquote_utf8(segments[4]))
+        if len(segments) == 4 and segments[3] == "confirmations" and method == "GET":
+            page = int(self._read_query(environ).get("page") or 1)
+            page_size = int(self._read_query(environ).get("pageSize") or 20)
+            return 200, self.service.list_confirmation_records(workspace_id, page, page_size)
         if len(segments) == 4 and segments[3] == "confirmations" and method == "POST":
             payload = self._read_json_body(environ)
             return 200, self.service.confirm_assignments(workspace_id, payload.get("actions") or {})

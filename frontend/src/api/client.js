@@ -115,6 +115,9 @@ export const apiClient = {
       body: JSON.stringify({ actions }),
     });
   },
+  listConfirmationRecords(workspaceId, page = 1, pageSize = 20) {
+    return request(`/api/workspaces/${workspaceId}/confirmations${buildQuery({ page, pageSize })}`);
+  },
   uploadModuleKnowledge(workspaceId, file) {
     const formData = new FormData();
     formData.append("file", file);

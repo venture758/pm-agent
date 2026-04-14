@@ -531,6 +531,23 @@ class WorkspaceService:
             "history": history,
         }
 
+    def list_confirmation_records(
+        self,
+        workspace_id: str,
+        page: int = 1,
+        page_size: int = 20,
+    ) -> dict[str, Any]:
+        items, total = self.workspaces.load_confirmation_records(workspace_id, page, page_size)
+        total_pages = max(1, (total + page_size - 1) // page_size)
+        return {
+            "workspace_id": workspace_id,
+            "items": _jsonable(items),
+            "page": page,
+            "page_size": page_size,
+            "total": total,
+            "total_pages": total_pages,
+        }
+
     def _load_workspace(self, workspace_id: str) -> WorkspaceState:
         workspace = self.workspaces.load_workspace(workspace_id)
         changed = False

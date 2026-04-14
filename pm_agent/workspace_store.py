@@ -127,6 +127,61 @@ class WorkspaceStore:
             self.database._raise_schema_hint_if_needed(exc)
             raise
 
+    def load_confirmation_records(
+        self,
+        workspace_id: str,
+        page: int = 1,
+        page_size: int = 20,
+    ) -> tuple[list[dict[str, Any]], int]:
+        """分页查询确认记录，按 created_at 降序排列。返回 (items, total_count)。"""
+        ph = self.database.placeholder
+        count_sql = (
+            f"SELECT COUNT(*) FROM workspace_confirmation_records WHERE workspace_id = {ph}"
+        )
+        data_sql = (
+            "SELECT session_id, confirmed_count, payload_json, created_at "
+            f"FROM workspace_confirmation_records WHERE workspace_id = {ph} "
+            "ORDER BY created_at DESC"
+        )
+        if self.database.scheme == "sqlite":
+            data_sql += " LIMIT ? OFFSET ?"
+        else:
+            data_sql += " LIMIT %s OFFSET %s"
+
+        offset = max(page - 1, 0) * page_size
+
+        try:
+            with self.database.connection() as connection:
+                cursor = connection.cursor()
+                cursor.execute(count_sql, (workspace_id,))
+                row = cursor.fetchone()
+                total = int(row[0] if isinstance(row, tuple) else row["COUNT(*)"]) if row else 0
+
+                if total == 0:
+                    return [], 0
+
+                cursor.execute(data_sql, (workspace_id, page_size, offset))
+                rows = cursor.fetchall() or []
+        except Exception as exc:
+            message = str(exc).lower()
+            if "workspace_confirmation_records" in message and ("doesn't exist" in message or "no such table" in message):
+                return [], 0
+            self.database._raise_schema_hint_if_needed(exc)
+            raise
+
+        items: list[dict[str, Any]] = []
+        for row in rows:
+            get = (lambda key: row[key]) if isinstance(row, dict) or hasattr(row, "keys") else None
+            payload_text = get("payload_json") if get else row[2]
+            payload = json.loads(payload_text)
+            items.append({
+                "session_id": str(get("session_id") if get else row[0]),
+                "confirmed_count": int(get("confirmed_count") if get else row[1]),
+                "confirmed_assignments": payload.get("confirmed_assignments", []),
+                "created_at": str(get("created_at") if get else row[3]),
+            })
+        return items, total
+
     def save_upload(self, workspace_id: str, kind: str, filename: str, content: bytes) -> WorkspaceUpload:
         target_dir = self.uploads_dir(workspace_id) / kind
         target_dir.mkdir(parents=True, exist_ok=True)
