@@ -1,12 +1,20 @@
 <script setup>
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from "vue";
+import { useRoute, useRouter } from "vue-router";
 
 import { useWorkspaceStore } from "../stores/workspace";
 
+const route = useRoute();
+const router = useRouter();
 const workspaceStore = useWorkspaceStore();
 const actions = reactive({});
 
-const activeTab = ref("recommendations");
+function normalizeTab(tab) {
+  const rawTab = Array.isArray(tab) ? tab[0] : tab;
+  return rawTab === "history" ? "history" : "recommendations";
+}
+
+const activeTab = ref(normalizeTab(route.query.tab));
 
 const searchKeyword = ref("");
 const moduleFilter = ref("");
@@ -152,6 +160,34 @@ function resetFilters() {
   sortBy.value = "confidence_desc";
 }
 
+function syncTabQuery(tab) {
+  const routeTab = Array.isArray(route.query.tab) ? route.query.tab[0] : route.query.tab;
+  if ((tab === "history" && routeTab === "history") || (tab === "recommendations" && routeTab == null)) {
+    return;
+  }
+
+  const nextQuery = { ...route.query };
+  if (tab === "history") {
+    nextQuery.tab = "history";
+  } else {
+    delete nextQuery.tab;
+  }
+
+  router.replace({
+    name: "recommendations",
+    params: { workspaceId: route.params.workspaceId || "default" },
+    query: nextQuery,
+  });
+}
+
+function setActiveTab(tab) {
+  const normalized = normalizeTab(tab);
+  if (activeTab.value === normalized) {
+    return;
+  }
+  activeTab.value = normalized;
+}
+
 async function markDeleted(requirementId) {
   if (isMobileReadonly.value) return;
   await workspaceStore.deleteRecommendation(requirementId);
@@ -203,6 +239,20 @@ watch(
   { deep: true },
 );
 
+watch(
+  () => route.query.tab,
+  (tab) => {
+    const normalized = normalizeTab(tab);
+    if (activeTab.value !== normalized) {
+      activeTab.value = normalized;
+    }
+  },
+);
+
+watch(activeTab, (tab) => {
+  syncTabQuery(tab);
+});
+
 onMounted(() => {
   syncMobileReadonly();
   if (typeof window !== "undefined") {
@@ -222,8 +272,8 @@ onUnmounted(() => {
     <!-- Page head with tab bar -->
     <div class="page-head">
       <div class="page-head-left">
-        <p class="section-kicker">Recommendation Console</p>
-        <h2 class="page-title">推荐确认</h2>
+        <p class="section-kicker">Confirmation Center</p>
+        <h2 class="page-title">确认中心</h2>
       </div>
       <div class="head-right">
         <span v-if="isMobileReadonly" class="soft-tag soft-tag-light">移动端仅浏览</span>
@@ -245,7 +295,8 @@ onUnmounted(() => {
       <button
         class="tab-item"
         :class="{ 'tab-item--active': activeTab === 'recommendations' }"
-        @click="activeTab = 'recommendations'"
+        data-test="tab-recommendations"
+        @click="setActiveTab('recommendations')"
       >
         <svg class="tab-icon" viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
           <path d="M3 4h14M3 10h14M3 16h10" />
@@ -256,7 +307,8 @@ onUnmounted(() => {
       <button
         class="tab-item"
         :class="{ 'tab-item--active': activeTab === 'history' }"
-        @click="activeTab = 'history'"
+        data-test="tab-history"
+        @click="setActiveTab('history')"
       >
         <svg class="tab-icon" viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
           <circle cx="10" cy="10" r="7" />

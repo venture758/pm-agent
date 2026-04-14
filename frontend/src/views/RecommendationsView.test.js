@@ -2,6 +2,19 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
 
+const mockRoute = {
+  params: { workspaceId: "default" },
+  query: {},
+};
+const mockRouterReplace = vi.fn(async () => {});
+
+vi.mock("vue-router", () => ({
+  useRoute: () => mockRoute,
+  useRouter: () => ({
+    replace: mockRouterReplace,
+  }),
+}));
+
 import RecommendationsView from "./RecommendationsView.vue";
 import { useWorkspaceStore } from "../stores/workspace";
 
@@ -25,6 +38,10 @@ function buildRecommendation(requirementId, title) {
 describe("RecommendationsView", () => {
   beforeEach(() => {
     setActivePinia(createPinia());
+    mockRoute.query = {};
+    mockRouterReplace.mockReset();
+    const store = useWorkspaceStore();
+    store.loadConfirmationHistory = vi.fn(async () => {});
   });
 
   it("deletes a recommendation immediately", async () => {
@@ -46,28 +63,7 @@ describe("RecommendationsView", () => {
     expect(store.workspace.recommendations).toHaveLength(1);
   });
 
-  it("batch deletes selected recommendations", async () => {
-    const store = useWorkspaceStore();
-    store.workspace.recommendations = [
-      buildRecommendation("R-1", "发票修复"),
-      buildRecommendation("R-2", "税率调整"),
-    ];
-    store.batchDeleteRecommendations = vi.fn(async (ids) => {
-      const removing = new Set(ids);
-      store.workspace.recommendations = store.workspace.recommendations.filter(
-        (item) => !removing.has(item.requirement_id),
-      );
-    });
-    store.confirmAssignments = vi.fn(async () => {});
-
-    const wrapper = mount(RecommendationsView);
-    await wrapper.findAll('[data-test="select-row"]')[0].setValue(true);
-    await wrapper.get('[data-test="batch-delete"]').trigger("click");
-    expect(store.batchDeleteRecommendations).toHaveBeenCalledWith(["R-1"]);
-    expect(store.workspace.recommendations).toHaveLength(1);
-  });
-
-  it("applies batch action to selected rows", async () => {
+  it("submits edited confirmation payload from the secondary panel", async () => {
     const store = useWorkspaceStore();
     store.workspace.recommendations = [
       buildRecommendation("R-1", "发票修复"),
@@ -76,15 +72,48 @@ describe("RecommendationsView", () => {
     store.confirmAssignments = vi.fn(async () => {});
 
     const wrapper = mount(RecommendationsView);
-    await wrapper.findAll('[data-test="select-row"]')[0].setValue(true);
-    await wrapper.get('[data-test="batch-action"]').setValue("reassign");
-    await wrapper.get('[data-test="batch-dev-owner"]').setValue("张三");
-    await wrapper.get('[data-test="batch-apply"]').trigger("click");
+    await wrapper.findAll("button.expand-btn")[0].trigger("click");
+    await wrapper.find(".expand-actions select").setValue("reassign");
+    await wrapper.find(".expand-actions input").setValue("张三");
     await wrapper.get('[data-test="submit-confirm"]').trigger("click");
 
     const payload = store.confirmAssignments.mock.calls[0][0];
     expect(payload["R-1"].action).toBe("reassign");
     expect(payload["R-1"].development_owner).toBe("张三");
     expect(payload["R-2"].action).toBe("accept");
+  });
+
+  it("opens history tab from route query", async () => {
+    mockRoute.query = { tab: "history" };
+    const store = useWorkspaceStore();
+    store.loadConfirmationHistory = vi.fn(async () => {});
+
+    const wrapper = mount(RecommendationsView);
+
+    expect(wrapper.text()).toContain("确认历史");
+    expect(wrapper.get('[data-test="tab-history"]').classes()).toContain("tab-item--active");
+    expect(store.loadConfirmationHistory).toHaveBeenCalledWith(1);
+  });
+
+  it("syncs tab changes back to route query", async () => {
+    const store = useWorkspaceStore();
+    store.loadConfirmationHistory = vi.fn(async () => {});
+
+    const wrapper = mount(RecommendationsView);
+
+    await wrapper.get('[data-test="tab-history"]').trigger("click");
+    expect(mockRouterReplace).toHaveBeenCalledWith({
+      name: "recommendations",
+      params: { workspaceId: "default" },
+      query: { tab: "history" },
+    });
+
+    mockRoute.query = { tab: "history" };
+    await wrapper.get('[data-test="tab-recommendations"]').trigger("click");
+    expect(mockRouterReplace).toHaveBeenLastCalledWith({
+      name: "recommendations",
+      params: { workspaceId: "default" },
+      query: {},
+    });
   });
 });

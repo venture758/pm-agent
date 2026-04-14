@@ -6,7 +6,6 @@ import PersonnelManagementView from "../views/PersonnelManagementView.vue";
 import RecommendationsView from "../views/RecommendationsView.vue";
 import DeliveryView from "../views/DeliveryView.vue";
 import MonitoringView from "../views/MonitoringView.vue";
-import ConfirmationHistoryView from "../views/ConfirmationHistoryView.vue";
 import InsightsView from "../views/InsightsView.vue";
 
 const routes = [
@@ -47,7 +46,14 @@ const routes = [
   {
     path: "/workspaces/:workspaceId/confirmations",
     name: "confirmations",
-    component: ConfirmationHistoryView,
+    redirect: (to) => ({
+      name: "recommendations",
+      params: to.params,
+      query: {
+        ...to.query,
+        tab: "history",
+      },
+    }),
   },
   {
     path: "/workspaces/:workspaceId/insights",
