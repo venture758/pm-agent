@@ -15,6 +15,7 @@ class MysqlSchemaFileTest(unittest.TestCase):
         self.assertIn("create table if not exists workspace_managed_members", text)
         self.assertIn("create table if not exists workspace_recommendations", text)
         self.assertIn("create table if not exists workspace_confirmation_records", text)
+        self.assertIn("create table if not exists workspace_knowledge_update_records", text)
         self.assertIn("create table if not exists workspace_story_records", text)
         self.assertIn("id bigint not null auto_increment", text)
         self.assertIn("primary key (id)", text)
@@ -30,6 +31,7 @@ class MysqlSchemaFileTest(unittest.TestCase):
             text,
         )
         self.assertIn("key idx_workspace_confirmation_records_workspace_id (workspace_id)", text)
+        self.assertIn("key idx_workspace_knowledge_update_records_workspace_id (workspace_id)", text)
         self.assertIn("backup_owners_json json not null", text)
         self.assertIn("familiar_members_json json not null", text)
         self.assertIn("aware_members_json json not null", text)
@@ -42,12 +44,14 @@ class MysqlSchemaFileTest(unittest.TestCase):
         self.assertIn("comment='工作区人员管理明细表'".lower(), text)
         self.assertIn("comment='工作区推荐确认明细表'".lower(), text)
         self.assertIn("comment='工作区确认记录表'".lower(), text)
+        self.assertIn("comment='工作区知识更新记录表'".lower(), text)
         self.assertIn("comment='工作区故事明细表'".lower(), text)
         self.assertIn("comment '主键id'".lower(), text)
         self.assertIn("comment '模块唯一键(大模块::功能模块)'".lower(), text)
         self.assertIn("comment '成员姓名'".lower(), text)
         self.assertIn("comment '需求唯一标识'".lower(), text)
         self.assertIn("comment '确认提交所属会话id'".lower(), text)
+        self.assertIn("comment '知识更新所属会话id'".lower(), text)
 
     def test_migration_script_exists_and_mentions_comments(self) -> None:
         migration_path = Path("db/migrate.mysql.module-entries.sql")
@@ -59,10 +63,12 @@ class MysqlSchemaFileTest(unittest.TestCase):
         self.assertIn("alter table workspace_managed_members", text)
         self.assertIn("alter table workspace_recommendations", text)
         self.assertIn("alter table workspace_confirmation_records", text)
+        self.assertIn("alter table workspace_knowledge_update_records", text)
         self.assertIn("comment = '工作区业务模块明细表'".lower(), text)
         self.assertIn("comment = '工作区人员管理明细表'".lower(), text)
         self.assertIn("comment = '工作区推荐确认明细表'".lower(), text)
         self.assertIn("comment = '工作区确认记录表'".lower(), text)
+        self.assertIn("comment = '工作区知识更新记录表'".lower(), text)
 
 
 if __name__ == "__main__":

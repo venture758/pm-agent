@@ -8,6 +8,7 @@ from .models import (
     AssignmentRecommendation,
     ConfirmedAssignment,
     ImportBatch,
+    KnowledgeUpdateRecord,
     MemberProfile,
     ModuleKnowledgeEntry,
     RequirementItem,
@@ -50,6 +51,7 @@ class WorkspaceState:
     uploads: list[WorkspaceUpload] = field(default_factory=list)
     messages: list[str] = field(default_factory=list)
     chat_messages: list[dict[str, Any]] = field(default_factory=list)
+    latest_knowledge_update: Optional[KnowledgeUpdateRecord] = None
     updated_at: str = field(default_factory=lambda: datetime.utcnow().isoformat())
 
     @classmethod
@@ -101,5 +103,10 @@ class WorkspaceState:
             uploads=[WorkspaceUpload(**item) for item in payload.get("uploads", [])],
             messages=list(payload.get("messages", [])),
             chat_messages=list(payload.get("chat_messages", [])),
+            latest_knowledge_update=(
+                KnowledgeUpdateRecord.from_payload(payload.get("latest_knowledge_update"))
+                if payload.get("latest_knowledge_update")
+                else None
+            ),
             updated_at=payload.get("updated_at", datetime.utcnow().isoformat()),
         )

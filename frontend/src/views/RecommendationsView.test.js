@@ -91,7 +91,7 @@ describe("RecommendationsView", () => {
     const wrapper = mount(RecommendationsView);
 
     expect(wrapper.text()).toContain("确认历史");
-    expect(wrapper.get('[data-test="tab-history"]').classes()).toContain("tab-item--active");
+    expect(wrapper.get('[data-test="tab-history"]').classes()).toContain("sub-nav-link--active");
     expect(store.loadConfirmationHistory).toHaveBeenCalledWith(1);
   });
 
@@ -115,5 +115,65 @@ describe("RecommendationsView", () => {
       params: { workspaceId: "default" },
       query: {},
     });
+  });
+
+  it("shows latest knowledge update summary on confirmation tab", async () => {
+    const store = useWorkspaceStore();
+    store.workspace.latest_knowledge_update = {
+      session_id: "session-1",
+      status: "success",
+      reply: "建议培养模块备份并补充模块归类。",
+      triggered_at: "2026-04-14T14:20:00",
+      knowledge_updates: {
+        suggested_familiarity: [{ member: "李祥" }],
+        suggested_modules: [{ big_module: "税务", function_module: "发票网关" }],
+      },
+      optimization_suggestions: [{ type: "single_point", suggestion: "培养 B 角" }],
+      error_message: "",
+    };
+
+    const wrapper = mount(RecommendationsView);
+
+    expect(wrapper.get('[data-test="latest-knowledge-update"]').text()).toContain("最近一次知识更新");
+    expect(wrapper.text()).toContain("建议培养模块备份并补充模块归类。");
+    expect(wrapper.text()).toContain("熟悉度建议 1");
+    expect(wrapper.text()).toContain("模块建议 1");
+    expect(wrapper.text()).toContain("优化建议 1");
+  });
+
+  it("shows knowledge update status and error in history tab", async () => {
+    mockRoute.query = { tab: "history" };
+    const store = useWorkspaceStore();
+    store.confirmationHistory.items = [
+      {
+        session_id: "session-2",
+        confirmed_count: 1,
+        created_at: "2026-04-14T14:20:00",
+        confirmed_assignments: [
+          {
+            requirement_id: "R-1",
+            title: "发票修复",
+            development_owner: "李祥",
+            testing_owner: "余萍",
+            backup_owner: "王海林",
+          },
+        ],
+        knowledge_update: {
+          status: "failed",
+          reply: "",
+          knowledge_updates: {},
+          optimization_suggestions: [],
+          error_message: "LLM 返回非 JSON",
+        },
+      },
+    ];
+    store.confirmationHistory.total = 1;
+    store.loadConfirmationHistory = vi.fn(async () => {});
+
+    const wrapper = mount(RecommendationsView);
+
+    expect(wrapper.get('[data-test="history-knowledge-status"]').text()).toContain("失败");
+    await wrapper.find(".h-summary-row").trigger("click");
+    expect(wrapper.text()).toContain("失败原因：LLM 返回非 JSON");
   });
 });

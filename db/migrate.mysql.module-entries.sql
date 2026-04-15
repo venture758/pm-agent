@@ -254,7 +254,84 @@ PREPARE stmt FROM @sql;
 EXECUTE stmt;
 DEALLOCATE PREPARE stmt;
 
--- 6) workspace_managed_members: create/upgrade table with comments
+-- 6) workspace_knowledge_update_records: create/upgrade table with comments
+CREATE TABLE IF NOT EXISTS workspace_knowledge_update_records (
+  id BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+  workspace_id VARCHAR(255) NOT NULL COMMENT '关联工作区标识',
+  session_id VARCHAR(64) NOT NULL COMMENT '知识更新所属会话ID',
+  status VARCHAR(32) NOT NULL COMMENT '运行状态(success/skipped/failed)',
+  payload_json LONGTEXT NOT NULL COMMENT '知识更新记录快照(JSON)',
+  created_at VARCHAR(64) NOT NULL COMMENT '触发时间(ISO8601)',
+  PRIMARY KEY (id),
+  KEY idx_workspace_knowledge_update_records_workspace_id (workspace_id),
+  KEY idx_workspace_knowledge_update_records_session_id (session_id),
+  CONSTRAINT fk_workspace_knowledge_update_records_workspace_id
+    FOREIGN KEY (workspace_id) REFERENCES workspace_states(workspace_id)
+    ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='工作区知识更新记录表';
+
+ALTER TABLE workspace_knowledge_update_records
+  MODIFY COLUMN id BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+  MODIFY COLUMN workspace_id VARCHAR(255) NOT NULL COMMENT '关联工作区标识',
+  MODIFY COLUMN session_id VARCHAR(64) NOT NULL COMMENT '知识更新所属会话ID',
+  MODIFY COLUMN status VARCHAR(32) NOT NULL COMMENT '运行状态(success/skipped/failed)',
+  MODIFY COLUMN payload_json LONGTEXT NOT NULL COMMENT '知识更新记录快照(JSON)',
+  MODIFY COLUMN created_at VARCHAR(64) NOT NULL COMMENT '触发时间(ISO8601)',
+  COMMENT = '工作区知识更新记录表';
+
+SET @sql := (
+  SELECT IF(
+    EXISTS(
+      SELECT 1
+      FROM information_schema.statistics
+      WHERE table_schema = DATABASE()
+        AND table_name = 'workspace_knowledge_update_records'
+        AND index_name = 'idx_workspace_knowledge_update_records_workspace_id'
+    ),
+    'SELECT 1',
+    'ALTER TABLE workspace_knowledge_update_records ADD KEY idx_workspace_knowledge_update_records_workspace_id (workspace_id)'
+  )
+);
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+SET @sql := (
+  SELECT IF(
+    EXISTS(
+      SELECT 1
+      FROM information_schema.statistics
+      WHERE table_schema = DATABASE()
+        AND table_name = 'workspace_knowledge_update_records'
+        AND index_name = 'idx_workspace_knowledge_update_records_session_id'
+    ),
+    'SELECT 1',
+    'ALTER TABLE workspace_knowledge_update_records ADD KEY idx_workspace_knowledge_update_records_session_id (session_id)'
+  )
+);
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+SET @sql := (
+  SELECT IF(
+    EXISTS(
+      SELECT 1
+      FROM information_schema.table_constraints
+      WHERE table_schema = DATABASE()
+        AND table_name = 'workspace_knowledge_update_records'
+        AND constraint_name = 'fk_workspace_knowledge_update_records_workspace_id'
+        AND constraint_type = 'FOREIGN KEY'
+    ),
+    'SELECT 1',
+    'ALTER TABLE workspace_knowledge_update_records ADD CONSTRAINT fk_workspace_knowledge_update_records_workspace_id FOREIGN KEY (workspace_id) REFERENCES workspace_states(workspace_id) ON DELETE CASCADE'
+  )
+);
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+-- 7) workspace_managed_members: create/upgrade table with comments
 CREATE TABLE IF NOT EXISTS workspace_managed_members (
   id BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID',
   workspace_id VARCHAR(255) NOT NULL COMMENT '关联工作区标识',

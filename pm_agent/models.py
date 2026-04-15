@@ -212,6 +212,36 @@ class ConfirmedAssignment:
 
 
 @dataclass
+class KnowledgeUpdateRecord:
+    workspace_id: str = ""
+    session_id: str = ""
+    status: str = "skipped"
+    reply: str = ""
+    knowledge_updates: dict[str, Any] = field(default_factory=dict)
+    optimization_suggestions: list[dict[str, Any]] = field(default_factory=list)
+    error_message: str = ""
+    triggered_at: str = field(default_factory=lambda: datetime.utcnow().isoformat())
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any] | None) -> "KnowledgeUpdateRecord":
+        data = dict(payload or {})
+        return cls(
+            workspace_id=str(data.get("workspace_id") or ""),
+            session_id=str(data.get("session_id") or ""),
+            status=str(data.get("status") or "skipped"),
+            reply=str(data.get("reply") or ""),
+            knowledge_updates=dict(data.get("knowledge_updates") or {}),
+            optimization_suggestions=[
+                dict(item)
+                for item in list(data.get("optimization_suggestions") or [])
+                if isinstance(item, Mapping)
+            ],
+            error_message=str(data.get("error_message") or ""),
+            triggered_at=str(data.get("triggered_at") or datetime.utcnow().isoformat()),
+        )
+
+
+@dataclass
 class StoryRecord:
     user_story_code: str
     name: str

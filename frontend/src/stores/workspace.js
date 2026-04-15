@@ -42,6 +42,7 @@ const EMPTY_WORKSPACE = () => ({
     entry_count: 0,
     sample_keys: [],
   },
+  latest_knowledge_update: null,
   group_reply_preview: "",
 });
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from datetime import date
 from pathlib import Path
-from typing import Iterable, Mapping, Optional
+from typing import Any, Iterable, Mapping, Optional
 from uuid import uuid4
 
 from .agent_prompt import (
@@ -253,28 +253,71 @@ class ProjectManagerAgent:
         reply = parsed.get("reply", "已解析需求")
         return requirements, reply
 
-    def generate_knowledge_update_suggestions(self) -> dict[str, object]:
+    def generate_knowledge_update_suggestions(
+        self,
+        confirmed_assignments: Optional[list[ConfirmedAssignment]] = None,
+    ) -> dict[str, Any]:
         """知识更新 Agent：调用 LLM 分析历史分配数据，给出优化建议。"""
         if not self._llm:
-            return {"knowledge_updates": {}, "optimization_suggestions": [], "reply": "LLM 未配置"}
+            return {
+                "status": "skipped",
+                "knowledge_updates": {},
+                "optimization_suggestions": [],
+                "reply": "LLM 未配置",
+                "error_message": "",
+            }
 
         module_summary = build_module_knowledge_summary(self.state.module_entries.values())
+        current_assignments = confirmed_assignments or []
+        current_summary = build_assignment_history(current_assignments, max_entries=max(len(current_assignments), 1))
         history = build_assignment_history(self.state.confirmed_assignments.values())
 
-        response_text = self._llm.chat_completion(
-            messages=[
-                {"role": "system", "content": KNOWLEDGE_UPDATE_PROMPT},
-                {"role": "user", "content": f"模块知识库:\n{module_summary}\n\n分配历史:\n{history}"},
-            ]
-        )
+        try:
+            response_text = self._llm.chat_completion(
+                messages=[
+                    {"role": "system", "content": KNOWLEDGE_UPDATE_PROMPT},
+                    {
+                        "role": "user",
+                        "content": (
+                            f"本次确认结果:\n{current_summary}\n\n"
+                            f"模块知识库:\n{module_summary}\n\n"
+                            f"最近分配历史:\n{history}"
+                        ),
+                    },
+                ]
+            )
+        except Exception as exc:
+            logger.exception("[knowledge.update] LLM 调用失败")
+            return {
+                "status": "failed",
+                "knowledge_updates": {},
+                "optimization_suggestions": [],
+                "reply": "",
+                "error_message": str(exc),
+            }
 
         try:
             parsed = self._llm.parse_json_response(response_text)
-        except ValueError:
-            return {"knowledge_updates": {}, "optimization_suggestions": [], "reply": response_text[:200]}
+        except ValueError as exc:
+            logger.warning("[knowledge.update] LLM 响应解析失败: %s", exc)
+            return {
+                "status": "failed",
+                "knowledge_updates": {},
+                "optimization_suggestions": [],
+                "reply": response_text[:200],
+                "error_message": str(exc),
+            }
+
+        knowledge_updates = parsed.get("knowledge_updates", {})
+        optimization_suggestions = parsed.get("optimization_suggestions")
+        if optimization_suggestions is None and isinstance(knowledge_updates, dict):
+            nested = knowledge_updates.get("optimization_suggestions", [])
+            optimization_suggestions = nested if isinstance(nested, list) else []
 
         return {
-            "knowledge_updates": parsed.get("knowledge_updates", {}),
-            "optimization_suggestions": parsed.get("optimization_suggestions", []),
+            "status": "success",
+            "knowledge_updates": knowledge_updates if isinstance(knowledge_updates, dict) else {},
+            "optimization_suggestions": optimization_suggestions if isinstance(optimization_suggestions, list) else [],
             "reply": parsed.get("reply", ""),
+            "error_message": "",
         }

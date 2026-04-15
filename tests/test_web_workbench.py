@@ -17,7 +17,51 @@ from pm_agent.story_excel_import import CANONICAL_STORY_HEADERS
 from pm_agent.workspace_models import WorkspaceState
 
 
+class FakeKnowledgeLlm:
+    def __init__(self, *, parsed: dict | None = None, chat_error: Exception | None = None, parse_error: Exception | None = None) -> None:
+        self.parsed = parsed or {}
+        self.chat_error = chat_error
+        self.parse_error = parse_error
+
+    def chat_completion(self, messages=None, **_kwargs) -> str:
+        if self.chat_error is not None:
+            raise self.chat_error
+        return json.dumps(self.parsed, ensure_ascii=False)
+
+    def parse_json_response(self, text: str) -> dict:
+        if self.parse_error is not None:
+            raise self.parse_error
+        return json.loads(text)
+
+
 class WebWorkbenchTest(unittest.TestCase):
+    def _prepare_confirmable_workspace(self, service: WorkspaceService) -> None:
+        service.create_managed_member(
+            "default",
+            {
+                "name": "李祥",
+                "role": "developer",
+                "skills": "发票",
+                "experience": "高",
+                "workload": 0.2,
+                "capacity": 1.0,
+            },
+        )
+        service.create_module_entry(
+            "default",
+            {
+                "big_module": "税务",
+                "function_module": "发票接口",
+                "primary_owner": "李祥",
+                "familiar_members": ["李祥"],
+            },
+        )
+        service.update_draft(
+            "default",
+            {"message_text": "1. 发票查验接口替换 https://example.com/1 优先级高"},
+        )
+        service.generate_recommendations("default")
+
     def _create_module_workbook(self, path: Path) -> None:
         workbook = Workbook()
         sheet = workbook.active
@@ -531,6 +575,79 @@ class WebWorkbenchTest(unittest.TestCase):
             self.assertEqual("default", record["workspace_id"])
             self.assertEqual(session_id, record["session_id"])
             self.assertEqual(1, record["confirmed_count"])
+
+    def test_confirm_assignments_persists_successful_knowledge_update_record(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            service = WorkspaceService(store_root=root)
+            service.agent._llm = FakeKnowledgeLlm(
+                parsed={
+                    "reply": "建议培养发票接口 B 角",
+                    "knowledge_updates": {
+                        "suggested_familiarity": [{"member": "余萍", "to": "了解"}],
+                        "suggested_modules": [],
+                    },
+                    "optimization_suggestions": [{"type": "single_point", "suggestion": "培养 B 角"}],
+                }
+            )
+            self._prepare_confirmable_workspace(service)
+            session_id = service.workspaces.load_workspace("default").current_session_id
+
+            payload = service.confirm_assignments("default", {"1": {"action": "accept"}})
+
+            self.assertEqual("success", payload["latest_knowledge_update"]["status"])
+            self.assertEqual(session_id, payload["latest_knowledge_update"]["session_id"])
+            self.assertEqual("建议培养发票接口 B 角", payload["latest_knowledge_update"]["reply"])
+
+            connection = sqlite3.connect(root / "pm_agent.db")
+            try:
+                cursor = connection.cursor()
+                cursor.execute(
+                    "SELECT session_id, status, payload_json FROM workspace_knowledge_update_records WHERE workspace_id = ?",
+                    ("default",),
+                )
+                rows = cursor.fetchall()
+            finally:
+                connection.close()
+
+            self.assertEqual(1, len(rows))
+            row_session_id, status, payload_json = rows[0]
+            self.assertEqual(session_id, row_session_id)
+            self.assertEqual("success", status)
+            record = json.loads(payload_json)
+            self.assertEqual("success", record["status"])
+            self.assertEqual("建议培养发票接口 B 角", record["reply"])
+
+            history = service.list_confirmation_records("default", page=1, page_size=20)
+            self.assertEqual("success", history["items"][0]["knowledge_update"]["status"])
+
+    def test_confirm_assignments_skips_knowledge_update_when_llm_unavailable(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            service = WorkspaceService(store_root=tmpdir)
+            self._prepare_confirmable_workspace(service)
+
+            payload = service.confirm_assignments("default", {"1": {"action": "accept"}})
+
+            self.assertEqual(1, len(payload["confirmed_assignments"]))
+            self.assertEqual("skipped", payload["latest_knowledge_update"]["status"])
+            self.assertEqual("LLM 未配置", payload["latest_knowledge_update"]["reply"])
+            history = service.list_confirmation_records("default", page=1, page_size=20)
+            self.assertEqual("skipped", history["items"][0]["knowledge_update"]["status"])
+
+    def test_confirm_assignments_marks_failed_knowledge_update_without_rollback(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            service = WorkspaceService(store_root=tmpdir)
+            service.agent._llm = FakeKnowledgeLlm(parse_error=ValueError("无法解析 JSON"))
+            self._prepare_confirmable_workspace(service)
+
+            payload = service.confirm_assignments("default", {"1": {"action": "accept"}})
+
+            self.assertEqual(1, len(payload["confirmed_assignments"]))
+            self.assertEqual("failed", payload["latest_knowledge_update"]["status"])
+            self.assertIn("无法解析 JSON", payload["latest_knowledge_update"]["error_message"])
+            workspace = service.workspaces.load_workspace("default")
+            self.assertEqual(1, len(workspace.confirmed_assignments))
+            self.assertEqual("failed", workspace.latest_knowledge_update.status)
 
     def test_chat_recommendation_flow(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

@@ -11,7 +11,7 @@ from uuid import uuid4
 
 from .config import DEFAULT_STATE_ROOT
 from .database import DatabaseStore
-from .models import AssignmentRecommendation, MemberProfile, ModuleKnowledgeEntry, StoryRecord
+from .models import AssignmentRecommendation, KnowledgeUpdateRecord, MemberProfile, ModuleKnowledgeEntry, StoryRecord
 from .story_excel_import import STORY_DB_COLUMNS, row_to_story_record
 from .task_excel_import import TASK_DB_COLUMNS, row_to_task_record
 
@@ -45,6 +45,9 @@ class WorkspaceStore:
     def load_workspace(self, workspace_id: str) -> WorkspaceState:
         payload = self.database.load_json("workspace_states", "workspace_id", workspace_id)
         workspace = WorkspaceState.from_dict(payload) if payload else WorkspaceState(workspace_id=workspace_id, title=workspace_id)
+        latest_knowledge_update = self.load_latest_knowledge_update_record(workspace_id)
+        if latest_knowledge_update is not None:
+            workspace.latest_knowledge_update = latest_knowledge_update
         workspace.current_session_requirement_ids = self._normalize_session_ids(workspace.current_session_requirement_ids)
         table_members = self._load_managed_members_from_table(workspace_id)
         if table_members:
@@ -127,6 +130,96 @@ class WorkspaceStore:
             self.database._raise_schema_hint_if_needed(exc)
             raise
 
+    def append_knowledge_update_record(
+        self,
+        record: KnowledgeUpdateRecord,
+    ) -> None:
+        payload = asdict(record)
+        if self.database.scheme == "sqlite":
+            insert_sql = (
+                "INSERT INTO workspace_knowledge_update_records ("
+                "workspace_id, session_id, status, payload_json, created_at"
+                ") VALUES (?, ?, ?, ?, ?)"
+            )
+        else:
+            insert_sql = (
+                "INSERT INTO workspace_knowledge_update_records ("
+                "workspace_id, session_id, status, payload_json, created_at"
+                ") VALUES (%s, %s, %s, %s, %s)"
+            )
+        try:
+            with self.database.connection() as connection:
+                cursor = connection.cursor()
+                cursor.execute(
+                    insert_sql,
+                    (
+                        record.workspace_id,
+                        record.session_id,
+                        record.status,
+                        json.dumps(payload, ensure_ascii=False, default=_json_default),
+                        record.triggered_at,
+                    ),
+                )
+        except Exception as exc:
+            self.database._raise_schema_hint_if_needed(exc)
+            raise
+
+    def load_latest_knowledge_update_record(self, workspace_id: str) -> KnowledgeUpdateRecord | None:
+        records = self.load_knowledge_update_records_by_sessions(workspace_id, [])
+        if "__latest__" not in records:
+            return None
+        return KnowledgeUpdateRecord.from_payload(records["__latest__"])
+
+    def load_knowledge_update_records_by_sessions(
+        self,
+        workspace_id: str,
+        session_ids: list[str],
+    ) -> dict[str, dict[str, Any]]:
+        latest_only = not session_ids
+        ph = self.database.placeholder
+        if latest_only:
+            sql = (
+                "SELECT session_id, payload_json "
+                f"FROM workspace_knowledge_update_records WHERE workspace_id = {ph} "
+                "ORDER BY created_at DESC LIMIT 1"
+            )
+            params: tuple[Any, ...] = (workspace_id,)
+        else:
+            placeholders = ", ".join([ph] * len(session_ids))
+            sql = (
+                "SELECT session_id, payload_json "
+                "FROM ("
+                "  SELECT session_id, payload_json, "
+                f"         ROW_NUMBER() OVER (PARTITION BY session_id ORDER BY created_at DESC, id DESC) AS rn "
+                "  FROM workspace_knowledge_update_records "
+                f"  WHERE workspace_id = {ph} AND session_id IN ({placeholders})"
+                ") latest "
+                "WHERE rn = 1"
+            )
+            params = (workspace_id, *session_ids)
+        try:
+            with self.database.connection() as connection:
+                cursor = connection.cursor()
+                cursor.execute(sql, params)
+                rows = cursor.fetchall() or []
+        except Exception as exc:
+            message = str(exc).lower()
+            if "workspace_knowledge_update_records" in message and ("doesn't exist" in message or "no such table" in message):
+                return {}
+            self.database._raise_schema_hint_if_needed(exc)
+            raise
+
+        records: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            get = (lambda key: row[key]) if isinstance(row, dict) or hasattr(row, "keys") else None
+            session_id = str(get("session_id") if get else row[0])
+            payload_text = get("payload_json") if get else row[1]
+            payload = json.loads(payload_text)
+            records[session_id] = payload
+        if latest_only and rows:
+            records["__latest__"] = next(iter(records.values()))
+        return records
+
     def load_confirmation_records(
         self,
         workspace_id: str,
@@ -180,6 +273,12 @@ class WorkspaceStore:
                 "confirmed_assignments": payload.get("confirmed_assignments", []),
                 "created_at": str(get("created_at") if get else row[3]),
             })
+        session_mapping = self.load_knowledge_update_records_by_sessions(
+            workspace_id,
+            [str(item["session_id"]) for item in items if str(item.get("session_id") or "").strip()],
+        )
+        for item in items:
+            item["knowledge_update"] = session_mapping.get(item["session_id"])
         return items, total
 
     def save_upload(self, workspace_id: str, kind: str, filename: str, content: bytes) -> WorkspaceUpload:

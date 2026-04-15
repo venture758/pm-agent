@@ -17,7 +17,7 @@ from .intake import (
     parse_imported_requirements,
 )
 from .knowledge_base import import_module_knowledge_from_excel, match_requirement_to_modules, merge_module_entries
-from .models import MemberProfile, ModuleKnowledgeEntry, RequirementItem
+from .models import KnowledgeUpdateRecord, MemberProfile, ModuleKnowledgeEntry, RequirementItem
 from .story_excel_import import import_story_excel, row_to_story_record
 from .task_excel_import import import_task_excel, row_to_task_record
 from .utils import normalize_name, normalize_requirement_id, normalize_text, safe_float, split_names, unique_list
@@ -356,12 +356,25 @@ class WorkspaceService:
         workspace.handoff_tasks = []
         workspace.messages = [f"已确认 {len(confirmed)} 条需求，已记录确认结果（未进入平台同步）"]
         workspace.updated_at = datetime.utcnow().isoformat()
+        knowledge_update = self.agent.generate_knowledge_update_suggestions(confirmed_assignments=confirmed)
+        knowledge_record = KnowledgeUpdateRecord(
+            workspace_id=workspace.workspace_id,
+            session_id=session_id,
+            status=str(knowledge_update.get("status") or "skipped"),
+            reply=str(knowledge_update.get("reply") or ""),
+            knowledge_updates=dict(knowledge_update.get("knowledge_updates") or {}),
+            optimization_suggestions=list(knowledge_update.get("optimization_suggestions") or []),
+            error_message=str(knowledge_update.get("error_message") or ""),
+            triggered_at=workspace.updated_at,
+        )
+        workspace.latest_knowledge_update = knowledge_record
         self.workspaces.append_confirmation_record(
             workspace_id=workspace.workspace_id,
             session_id=session_id,
             confirmed_assignments=confirmed,
             created_at=workspace.updated_at,
         )
+        self.workspaces.append_knowledge_update_record(knowledge_record)
         self.workspaces.save_workspace(workspace)
         return self._build_workspace_payload(workspace)
 
@@ -1018,6 +1031,7 @@ class WorkspaceService:
             "uploads": _jsonable(workspace.uploads),
             "messages": list(workspace.messages),
             "knowledge_base_summary": self._knowledge_base_summary(workspace),
+            "latest_knowledge_update": _jsonable(workspace.latest_knowledge_update),
             "group_reply_preview": (
                 self.agent.render_group_reply(workspace.recommendations)
                 if workspace.recommendations

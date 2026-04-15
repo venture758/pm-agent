@@ -95,6 +95,21 @@ CREATE TABLE IF NOT EXISTS workspace_confirmation_records (
     ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='工作区确认记录表';
 
+CREATE TABLE IF NOT EXISTS workspace_knowledge_update_records (
+  id BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+  workspace_id VARCHAR(255) NOT NULL COMMENT '关联工作区标识',
+  session_id VARCHAR(64) NOT NULL COMMENT '知识更新所属会话ID',
+  status VARCHAR(32) NOT NULL COMMENT '运行状态(success/skipped/failed)',
+  payload_json LONGTEXT NOT NULL COMMENT '知识更新记录快照(JSON)',
+  created_at VARCHAR(64) NOT NULL COMMENT '触发时间(ISO8601)',
+  PRIMARY KEY (id),
+  KEY idx_workspace_knowledge_update_records_workspace_id (workspace_id),
+  KEY idx_workspace_knowledge_update_records_session_id (session_id),
+  CONSTRAINT fk_workspace_knowledge_update_records_workspace_id
+    FOREIGN KEY (workspace_id) REFERENCES workspace_states(workspace_id)
+    ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='工作区知识更新记录表';
+
 CREATE TABLE IF NOT EXISTS workspace_insight_snapshots (
   id BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID',
   workspace_id VARCHAR(255) NOT NULL COMMENT '关联工作区标识',

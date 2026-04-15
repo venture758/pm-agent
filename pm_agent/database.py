@@ -198,6 +198,15 @@ class DatabaseStore:
                 "created_at TEXT NOT NULL)"
             ),
             (
+                "CREATE TABLE IF NOT EXISTS workspace_knowledge_update_records ("
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                "workspace_id TEXT NOT NULL, "
+                "session_id TEXT NOT NULL, "
+                "status TEXT NOT NULL, "
+                "payload_json TEXT NOT NULL, "
+                "created_at TEXT NOT NULL)"
+            ),
+            (
                 "CREATE TABLE IF NOT EXISTS workspace_insight_snapshots ("
                 "id INTEGER PRIMARY KEY AUTOINCREMENT, "
                 "workspace_id TEXT NOT NULL, "
