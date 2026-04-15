@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-DEFAULT_STATE_ROOT = ".pm_agent_store"
-DEFAULT_STATE_FILE = "state.json"
-DEFAULT_DATABASE_FILENAME = "pm_agent.db"
 DEFAULT_MYSQL_DDL_PATH = "db/schema.mysql.ddl.sql"
 
 WORKFLOW_CONFIGS = {

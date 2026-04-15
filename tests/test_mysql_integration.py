@@ -12,7 +12,7 @@ from pm_agent.database import DatabaseStore
 class MysqlIntegrationTest(unittest.TestCase):
     def test_service_flow_on_mysql(self) -> None:
         database_url = os.environ["PM_AGENT_TEST_DATABASE_URL"]
-        store = DatabaseStore(root=".pm_agent_store", database_url=database_url)
+        store = DatabaseStore(database_url=database_url)
         ddl = Path("db/schema.mysql.ddl.sql").read_text(encoding="utf-8")
         statements = [statement.strip() for statement in ddl.split(";") if statement.strip()]
 
@@ -26,7 +26,7 @@ class MysqlIntegrationTest(unittest.TestCase):
             cursor.execute("DELETE FROM workspace_states")
             cursor.execute("DELETE FROM agent_states")
 
-        service = WorkspaceService(store_root=".pm_agent_store", database_url=database_url)
+        service = WorkspaceService(database_url=database_url)
         service.create_managed_member(
             "mysql-test",
             {

@@ -23,7 +23,7 @@
 - `pm_agent/api_service.py`
   提供工作区应用服务，封装业务模块维护、人员管理、推荐、确认、上传和查询动作
 - `pm_agent/workspace_store.py`
-  提供工作区状态持久化，上传文件仍保存在磁盘
+  提供工作区状态持久化，工作区状态和上传元数据仅保存在数据库
 - `pm_agent/database.py`
   提供统一数据库存储（MySQL + SQLite）
 - `db/schema.mysql.ddl.sql`
@@ -51,7 +51,7 @@
 ```python
 from pm_agent import ProjectManagerAgent
 
-agent = ProjectManagerAgent()
+agent = ProjectManagerAgent(database_url="mysql://user:pass@127.0.0.1:3306/pm_agent?charset=utf8mb4")
 agent.sync_module_knowledge_base("docs/泾渭云后端业务模块划分、模块负责人、熟练度.xlsx")
 
 message = """
@@ -98,10 +98,22 @@ python3 -m unittest discover -s tests
 
 ## Web 工作台启动
 
+默认配置文件：
+
+```toml
+config/pm_agent.toml
+```
+
+按环境加载逻辑：
+- 默认环境：`dev`
+- 可通过 `PM_AGENT_ENV` 或 `--env` 切换到 `test` / `prod`
+- 可通过 `PM_AGENT_CONFIG` 或 `--config` 指向其他配置文件
+- 覆盖优先级：`CLI 参数 > 环境变量 > 配置文件`
+
 后端 API：
 
 ```bash
-python3 -m pm_agent_web --host 127.0.0.1 --port 8000 --database-url "mysql://root:@Admin123456@127.0.0.1:3306/pm_agent?charset=utf8mb4"
+python3 -m pm_agent_web
 ```
 
 初始化 MySQL（先建库，再执行 DDL）：
@@ -127,7 +139,19 @@ mysql -h127.0.0.1 -u<user> -p pm_agent < db/migrate.mysql.module-entries.sql
 - 回滚应用版本后可不删除 `workspace_story_records`（保留数据，接口不再读取即可）。
 - 如需临时禁用功能，可前端隐藏“单独上传故事 Excel”入口，后端不调用 story-only 路由。
 
-本地开发和单元测试未传 `--database-url` 时，默认落到 `.pm_agent_store/pm_agent.db`（SQLite）以便快速运行。
+数据库连接是必填前置条件。现在默认从 `config/pm_agent.toml` 读取。
+
+示例：
+
+```bash
+PM_AGENT_ENV=prod python3 -m pm_agent_web
+```
+
+如果要临时覆盖数据库地址，仍然可以：
+
+```bash
+python3 -m pm_agent_web --host 127.0.0.1 --port 8000 --database-url "sqlite:////absolute/path/to/pm_agent.db"
+```
 
 前端：
 
@@ -162,7 +186,7 @@ npm run dev
   `大模块`、`功能模块`、`主要负责人`、`B角`、`成员熟悉度`
 - 模块知识库 Excel 导入仍保留，用于批量更新已有模块条目。
 - 手工维护和 Excel 导入共用同一套模块知识条目，后续推荐会直接复用更新后的数据。
-- 旧版本遗留的 `.pm_agent_store/state.json` 和 `workspaces/*/workspace.json` 会在首次启动时自动迁移到数据库。
+- 运行时不再读取 `.pm_agent_store/state.json`、`workspaces/*/workspace.json` 或任何本地上传目录。
 - MySQL 环境建议统一通过 `db/schema.mysql.ddl.sql` 执行初始化和后续维护脚本。
 
 ## 前端测试

@@ -26,9 +26,12 @@ class FakeLlm:
 
 
 class KnowledgeUpdateAgentTest(unittest.TestCase):
+    def _sqlite_url(self, root: str) -> str:
+        return f"sqlite:///{root}/pm_agent.db"
+
     def test_generate_knowledge_update_suggestions_skips_when_llm_unavailable(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
-            agent = ProjectManagerAgent(store_root=tmpdir)
+            agent = ProjectManagerAgent(database_url=self._sqlite_url(tmpdir))
 
             result = agent.generate_knowledge_update_suggestions([])
 
@@ -38,7 +41,7 @@ class KnowledgeUpdateAgentTest(unittest.TestCase):
 
     def test_generate_knowledge_update_suggestions_returns_success_payload(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
-            agent = ProjectManagerAgent(store_root=tmpdir)
+            agent = ProjectManagerAgent(database_url=self._sqlite_url(tmpdir))
             agent.state.module_entries = {
                 "税务::发票接口": ModuleKnowledgeEntry(
                     key="税务::发票接口",
@@ -77,7 +80,7 @@ class KnowledgeUpdateAgentTest(unittest.TestCase):
 
     def test_generate_knowledge_update_suggestions_handles_parse_failure(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
-            agent = ProjectManagerAgent(store_root=tmpdir)
+            agent = ProjectManagerAgent(database_url=self._sqlite_url(tmpdir))
             agent._llm = FakeLlm(
                 response_text="not-json",
                 parse_error=ValueError("无法解析 JSON"),

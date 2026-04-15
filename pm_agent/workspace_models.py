@@ -6,6 +6,7 @@ from typing import Any, Optional
 
 from .models import (
     AssignmentRecommendation,
+    ChatSession,
     ConfirmedAssignment,
     ImportBatch,
     KnowledgeUpdateRecord,
@@ -23,8 +24,19 @@ from .utils import normalize_requirement_id
 class WorkspaceUpload:
     kind: str
     original_name: str
-    stored_path: str
+    file_size: int = 0
+    storage_backend: str = "database"
     uploaded_at: str = field(default_factory=lambda: datetime.utcnow().isoformat())
+
+    @classmethod
+    def from_payload(cls, payload: dict[str, Any]) -> "WorkspaceUpload":
+        return cls(
+            kind=str(payload.get("kind") or ""),
+            original_name=str(payload.get("original_name") or ""),
+            file_size=int(payload.get("file_size") or 0),
+            storage_backend=str(payload.get("storage_backend") or "database"),
+            uploaded_at=str(payload.get("uploaded_at") or datetime.utcnow().isoformat()),
+        )
 
 
 @dataclass
@@ -51,6 +63,8 @@ class WorkspaceState:
     uploads: list[WorkspaceUpload] = field(default_factory=list)
     messages: list[str] = field(default_factory=list)
     chat_messages: list[dict[str, Any]] = field(default_factory=list)
+    chat_sessions: list[ChatSession] = field(default_factory=list)
+    active_session_id: str = ""
     latest_knowledge_update: Optional[KnowledgeUpdateRecord] = None
     updated_at: str = field(default_factory=lambda: datetime.utcnow().isoformat())
 
@@ -100,9 +114,11 @@ class WorkspaceState:
             ),
             latest_story_import=payload.get("latest_story_import"),
             latest_task_import=payload.get("latest_task_import"),
-            uploads=[WorkspaceUpload(**item) for item in payload.get("uploads", [])],
+            uploads=[WorkspaceUpload.from_payload(item) for item in payload.get("uploads", [])],
             messages=list(payload.get("messages", [])),
             chat_messages=list(payload.get("chat_messages", [])),
+            chat_sessions=[ChatSession(**item) for item in payload.get("chat_sessions", [])],
+            active_session_id=str(payload.get("active_session_id") or ""),
             latest_knowledge_update=(
                 KnowledgeUpdateRecord.from_payload(payload.get("latest_knowledge_update"))
                 if payload.get("latest_knowledge_update")

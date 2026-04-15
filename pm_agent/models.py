@@ -178,6 +178,17 @@ class ModuleKnowledgeEntry:
 
 
 @dataclass
+class ChatSession:
+    session_id: str
+    created_at: str = field(default_factory=lambda: datetime.utcnow().isoformat())
+    last_active_at: str = field(default_factory=lambda: datetime.utcnow().isoformat())
+    status: str = "active"  # "active" | "confirmed" | "archived"
+    messages: list[dict[str, Any]] = field(default_factory=list)
+    requirement_ids: list[str] = field(default_factory=list)
+    last_message_preview: str = ""
+
+
+@dataclass
 class AssignmentRecommendation:
     requirement_id: str
     title: str

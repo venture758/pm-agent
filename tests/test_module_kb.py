@@ -25,7 +25,7 @@ class ModuleKnowledgeBaseTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir) / "module.xlsx"
             self._create_workbook(path)
-            entries = import_module_knowledge_from_excel(path)
+            entries = import_module_knowledge_from_excel(path.read_bytes())
             self.assertEqual(2, len(entries))
             self.assertEqual("何永乐", entries[0].primary_owner)
             self.assertEqual("王海林", entries[1].backup_owner)

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import logging
 from datetime import date
-from pathlib import Path
 from typing import Any, Iterable, Mapping, Optional
 from uuid import uuid4
 
@@ -30,6 +29,7 @@ from .knowledge_base import (
     merge_module_entries,
     update_module_knowledge_after_assignment,
 )
+from .excel_io import ExcelInput
 from .llm_client import LlmClient
 from .assignment import aggregate_workload_from_tasks, recommend_assignments
 from .llm_client import LlmClient
@@ -51,11 +51,10 @@ logger = logging.getLogger(__name__)
 class ProjectManagerAgent:
     def __init__(
         self,
-        store_root: str | Path = ".pm_agent_store",
         database_url: str | None = None,
         dashscope_api_key: str = "",
     ) -> None:
-        self.store = LocalStateStore(root=store_root, database_url=database_url)
+        self.store = LocalStateStore(database_url=database_url)
         self.state: AgentState = self.store.load_state()
         self.workflow_configs = WORKFLOW_CONFIGS
         self._llm: LlmClient | None = None
@@ -69,8 +68,8 @@ class ProjectManagerAgent:
     def save(self) -> None:
         self.store.save_state(self.state)
 
-    def sync_module_knowledge_base(self, excel_path: str | Path):
-        imported_entries = import_module_knowledge_from_excel(excel_path)
+    def sync_module_knowledge_base(self, excel_source: ExcelInput):
+        imported_entries = import_module_knowledge_from_excel(excel_source)
         self.state.module_entries = merge_module_entries(self.state.module_entries, imported_entries)
         self.save()
         return list(self.state.module_entries.values())
@@ -149,8 +148,14 @@ class ProjectManagerAgent:
         self.save()
         return stories, tasks
 
-    def sync_daily_exports(self, story_excel_path: str | Path, task_excel_path: str | Path):
-        batch = sync_platform_exports(self.state, story_excel_path, task_excel_path)
+    def sync_daily_exports(
+        self,
+        story_excel: ExcelInput,
+        task_excel: ExcelInput,
+        *,
+        source_files: Optional[list[str]] = None,
+    ):
+        batch = sync_platform_exports(self.state, story_excel, task_excel, source_files=source_files)
         validate_import_batch(batch)
         self.save()
         return batch

@@ -5,16 +5,14 @@ import json
 import sqlite3
 import tempfile
 import unittest
-from dataclasses import asdict
 from pathlib import Path
 
 from openpyxl import Workbook
 
 from pm_agent.api import create_api_app
 from pm_agent.api_service import WorkspaceService
-from pm_agent.models import AgentState, AssignmentRecommendation, MemberProfile, ModuleKnowledgeEntry, RequirementItem
+from pm_agent.models import AssignmentRecommendation, MemberProfile, ModuleKnowledgeEntry, RequirementItem
 from pm_agent.story_excel_import import CANONICAL_STORY_HEADERS
-from pm_agent.workspace_models import WorkspaceState
 
 
 class FakeKnowledgeLlm:
@@ -35,6 +33,15 @@ class FakeKnowledgeLlm:
 
 
 class WebWorkbenchTest(unittest.TestCase):
+    def _sqlite_url(self, root: str | Path) -> str:
+        return f"sqlite:///{Path(root) / 'pm_agent.db'}"
+
+    def _create_service(self, root: str | Path) -> WorkspaceService:
+        return WorkspaceService(database_url=self._sqlite_url(root))
+
+    def _create_app(self, root: str | Path):
+        return create_api_app(database_url=self._sqlite_url(root))
+
     def _prepare_confirmable_workspace(self, service: WorkspaceService) -> None:
         service.create_managed_member(
             "default",
@@ -167,10 +174,16 @@ class WebWorkbenchTest(unittest.TestCase):
         )
         return result["status"], json.loads(response.decode("utf-8"))
 
+    def test_database_configuration_is_required(self) -> None:
+        with self.assertRaisesRegex(ValueError, "PM_AGENT_DATABASE_URL"):
+            WorkspaceService()
+        with self.assertRaisesRegex(ValueError, "PM_AGENT_DATABASE_URL"):
+            create_api_app()
+
     def test_service_flow(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
-            service = WorkspaceService(store_root=root)
+            service = self._create_service(root)
             service.create_managed_member(
                 "default",
                 {
@@ -283,6 +296,9 @@ class WebWorkbenchTest(unittest.TestCase):
 
             module_payload = service.upload_module_knowledge("default", "module.xlsx", module_path.read_bytes())
             self.assertGreater(module_payload["knowledge_base_summary"]["entry_count"], 0)
+            self.assertEqual("database", module_payload["uploads"][-1]["storage_backend"])
+            self.assertEqual(len(module_path.read_bytes()), module_payload["uploads"][-1]["file_size"])
+            self.assertFalse((root / "workspaces" / "default" / "uploads").exists())
 
             sync_payload = service.sync_platform_files(
                 "default",
@@ -290,6 +306,7 @@ class WebWorkbenchTest(unittest.TestCase):
                 ("task.xlsx", task_path.read_bytes()),
             )
             self.assertIsNotNone(sync_payload["latest_sync_batch"])
+            self.assertFalse((root / "workspaces" / "default" / "uploads").exists())
 
             alerts = service.get_monitoring("default")
             self.assertTrue(alerts["alerts"])
@@ -299,7 +316,7 @@ class WebWorkbenchTest(unittest.TestCase):
 
     def test_api_routes(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
-            app = create_api_app(store_root=tmpdir)
+            app = self._create_app(tmpdir)
             status, payload = self._request(
                 app,
                 "POST",
@@ -412,7 +429,7 @@ class WebWorkbenchTest(unittest.TestCase):
     def test_story_only_upload_service_supports_partial_fail_and_upsert(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
-            service = WorkspaceService(store_root=root)
+            service = self._create_service(root)
 
             def story_row(code: str | None, name: str, seq: int) -> dict[str, object]:
                 row = {header: None for header in CANONICAL_STORY_HEADERS}
@@ -463,7 +480,7 @@ class WebWorkbenchTest(unittest.TestCase):
 
     def test_story_only_upload_api_success_and_full_fail(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
-            app = create_api_app(store_root=tmpdir)
+            app = self._create_app(tmpdir)
             root = Path(tmpdir)
 
             valid_path = root / "story-valid.xlsx"
@@ -504,7 +521,7 @@ class WebWorkbenchTest(unittest.TestCase):
 
     def test_delete_recommendation_normalizes_requirement_id(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
-            service = WorkspaceService(store_root=tmpdir)
+            service = self._create_service(tmpdir)
             workspace = service.workspaces.load_workspace("default")
             workspace.recommendations = [
                 AssignmentRecommendation(
@@ -521,7 +538,7 @@ class WebWorkbenchTest(unittest.TestCase):
     def test_confirm_assignments_persists_internal_record_only(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
-            service = WorkspaceService(store_root=root)
+            service = self._create_service(root)
             service.create_managed_member(
                 "default",
                 {
@@ -579,7 +596,7 @@ class WebWorkbenchTest(unittest.TestCase):
     def test_confirm_assignments_persists_successful_knowledge_update_record(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
-            service = WorkspaceService(store_root=root)
+            service = self._create_service(root)
             service.agent._llm = FakeKnowledgeLlm(
                 parsed={
                     "reply": "建议培养发票接口 B 角",
@@ -623,7 +640,7 @@ class WebWorkbenchTest(unittest.TestCase):
 
     def test_confirm_assignments_skips_knowledge_update_when_llm_unavailable(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
-            service = WorkspaceService(store_root=tmpdir)
+            service = self._create_service(tmpdir)
             self._prepare_confirmable_workspace(service)
 
             payload = service.confirm_assignments("default", {"1": {"action": "accept"}})
@@ -636,7 +653,7 @@ class WebWorkbenchTest(unittest.TestCase):
 
     def test_confirm_assignments_marks_failed_knowledge_update_without_rollback(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
-            service = WorkspaceService(store_root=tmpdir)
+            service = self._create_service(tmpdir)
             service.agent._llm = FakeKnowledgeLlm(parse_error=ValueError("无法解析 JSON"))
             self._prepare_confirmable_workspace(service)
 
@@ -651,7 +668,7 @@ class WebWorkbenchTest(unittest.TestCase):
 
     def test_chat_recommendation_flow(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
-            service = WorkspaceService(store_root=tmpdir)
+            service = self._create_service(tmpdir)
             service.create_managed_member(
                 "default",
                 {
@@ -699,7 +716,7 @@ class WebWorkbenchTest(unittest.TestCase):
 
     def test_generate_recommendations_only_current_session(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
-            service = WorkspaceService(store_root=tmpdir)
+            service = self._create_service(tmpdir)
             service.create_managed_member(
                 "default",
                 {
@@ -744,7 +761,7 @@ class WebWorkbenchTest(unittest.TestCase):
 
     def test_api_recommendation_requires_current_session(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
-            app = create_api_app(store_root=tmpdir)
+            app = self._create_app(tmpdir)
             status, payload = self._request(
                 app,
                 "POST",
@@ -784,7 +801,7 @@ class WebWorkbenchTest(unittest.TestCase):
 
     def test_maintenance_validation(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
-            service = WorkspaceService(store_root=tmpdir)
+            service = self._create_service(tmpdir)
             with self.assertRaisesRegex(ValueError, "请先在人员管理页面维护成员"):
                 service.create_module_entry(
                     "default",
@@ -852,7 +869,7 @@ class WebWorkbenchTest(unittest.TestCase):
 
     def test_update_module_entry_supports_stale_path_key(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
-            service = WorkspaceService(store_root=tmpdir)
+            service = self._create_service(tmpdir)
             service.create_managed_member(
                 "default",
                 {
@@ -899,68 +916,64 @@ class WebWorkbenchTest(unittest.TestCase):
             self.assertEqual(1, len(payload["module_entries"]))
             self.assertEqual("税务-新::发票接口", payload["module_entries"][0]["key"])
 
-    def test_legacy_json_is_migrated_into_database(self) -> None:
+    def test_local_legacy_files_are_ignored(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             legacy_workspace_dir = root / "workspaces" / "default"
             legacy_workspace_dir.mkdir(parents=True, exist_ok=True)
 
-            legacy_agent = AgentState(
-                module_entries={
-                    "税务::发票接口": ModuleKnowledgeEntry(
-                        key="税务::发票接口",
-                        big_module="税务",
-                        function_module="发票接口",
-                        primary_owner="李祥",
-                        backup_owners=["余萍"],
-                        familiar_members=["李祥"],
-                    )
-                }
-            )
-            (root / "state.json").write_text(json.dumps(legacy_agent.to_dict(), ensure_ascii=False), encoding="utf-8")
-
-            legacy_workspace = WorkspaceState(workspace_id="default", title="默认工作区", messages=["legacy"])
+            (root / "state.json").write_text(json.dumps({"messages": ["legacy-agent"]}, ensure_ascii=False), encoding="utf-8")
             (legacy_workspace_dir / "workspace.json").write_text(
-                json.dumps(asdict(legacy_workspace), ensure_ascii=False),
+                json.dumps({"workspace_id": "default", "title": "默认工作区", "messages": ["legacy"]}, ensure_ascii=False),
                 encoding="utf-8",
             )
 
-            service = WorkspaceService(store_root=root)
+            service = self._create_service(root)
             payload = service.get_workspace("default")
-            self.assertEqual("默认工作区", payload["title"])
-            self.assertEqual(["legacy"], payload["messages"])
-            self.assertTrue((root / "pm_agent.db").exists())
+            self.assertEqual("default", payload["title"])
+            self.assertEqual([], payload["messages"])
 
-    def test_legacy_managed_members_are_migrated_into_member_table(self) -> None:
+            connection = sqlite3.connect(root / "pm_agent.db")
+            try:
+                cursor = connection.cursor()
+                cursor.execute("SELECT COUNT(1) FROM workspace_states WHERE workspace_id = ?", ("default",))
+                self.assertEqual(0, cursor.fetchone()[0])
+                cursor.execute("SELECT COUNT(1) FROM agent_states WHERE state_key = ?", ("global",))
+                self.assertEqual(0, cursor.fetchone()[0])
+            finally:
+                connection.close()
+
+    def test_local_workspace_json_does_not_backfill_member_table(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             legacy_workspace_dir = root / "workspaces" / "default"
             legacy_workspace_dir.mkdir(parents=True, exist_ok=True)
 
-            legacy_workspace = WorkspaceState(
-                workspace_id="default",
-                title="默认工作区",
-                managed_members=[
-                    MemberProfile(
-                        name="李祥",
-                        role="developer",
-                        skills=["税务", "接口"],
-                        experience_level="高",
-                        workload=0.1,
-                        capacity=1.0,
-                        constraints=["仅白天可排期"],
-                    )
-                ],
-            )
             (legacy_workspace_dir / "workspace.json").write_text(
-                json.dumps(asdict(legacy_workspace), ensure_ascii=False),
+                json.dumps(
+                    {
+                        "workspace_id": "default",
+                        "title": "默认工作区",
+                        "managed_members": [
+                            {
+                                "name": "李祥",
+                                "role": "developer",
+                                "skills": ["税务", "接口"],
+                                "experience_level": "高",
+                                "workload": 0.1,
+                                "capacity": 1.0,
+                                "constraints": ["仅白天可排期"],
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
                 encoding="utf-8",
             )
 
-            service = WorkspaceService(store_root=root)
+            service = self._create_service(root)
             payload = service.get_workspace("default")
-            self.assertEqual(1, len(payload["managed_members"]))
-            self.assertEqual("李祥", payload["managed_members"][0]["name"])
+            self.assertEqual([], payload["managed_members"])
 
             connection = sqlite3.connect(root / "pm_agent.db")
             try:
@@ -970,23 +983,14 @@ class WebWorkbenchTest(unittest.TestCase):
                     ("default",),
                 )
                 count = cursor.fetchone()[0]
-                self.assertEqual(1, count)
-
-                cursor.execute(
-                    "SELECT payload FROM workspace_states WHERE workspace_id = ?",
-                    ("default",),
-                )
-                row = cursor.fetchone()
-                self.assertIsNotNone(row)
-                state_payload = json.loads(row[0])
-                self.assertEqual([], state_payload.get("managed_members"))
+                self.assertEqual(0, count)
             finally:
                 connection.close()
 
     def test_confirmation_history_pagination(self) -> None:
         """GET /api/workspaces/:id/confirmations should return paginated records."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            app = create_api_app(store_root=tmpdir)
+            app = self._create_app(tmpdir)
 
             # Confirm a record first
             status, _ = self._request(
@@ -1009,7 +1013,7 @@ class WebWorkbenchTest(unittest.TestCase):
     def test_confirmation_history_returns_records(self) -> None:
         """After confirming assignments, GET confirmations should return the record."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            service = WorkspaceService(store_root=tmpdir)
+            service = self._create_service(tmpdir)
 
             # Set up members and modules
             service.agent.state.module_entries = {
@@ -1053,7 +1057,7 @@ class WebWorkbenchTest(unittest.TestCase):
     def test_confirmation_history_out_of_range_page(self) -> None:
         """Requesting a page beyond total should return empty items with correct total."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            service = WorkspaceService(store_root=tmpdir)
+            service = self._create_service(tmpdir)
             items, total = service.workspaces.load_confirmation_records("default", page=5, page_size=10)
             self.assertEqual(0, total)
             self.assertEqual([], items)
@@ -1061,7 +1065,7 @@ class WebWorkbenchTest(unittest.TestCase):
     def test_story_pagination_default(self) -> None:
         """GET /api/workspaces/:id/stories returns paginated response with default page=1, pageSize=20."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            app = create_api_app(store_root=tmpdir)
+            app = self._create_app(tmpdir)
             # Insert story records directly via database
             store = app.service.workspaces
             with store.database.connection() as conn:
@@ -1084,7 +1088,7 @@ class WebWorkbenchTest(unittest.TestCase):
     def test_story_pagination_keyword_filter(self) -> None:
         """Keyword filter on stories endpoint returns matching records."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            app = create_api_app(store_root=tmpdir)
+            app = self._create_app(tmpdir)
             store = app.service.workspaces
             with store.database.connection() as conn:
                 cursor = conn.cursor()
@@ -1103,7 +1107,7 @@ class WebWorkbenchTest(unittest.TestCase):
     def test_story_pagination_empty_workspace(self) -> None:
         """Empty workspace returns zero total."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            app = create_api_app(store_root=tmpdir)
+            app = self._create_app(tmpdir)
             status, payload = self._request(app, "GET", "/api/workspaces/empty-ws/stories")
             self.assertTrue(status.startswith("200"))
             self.assertEqual(0, payload["total"])
@@ -1113,7 +1117,7 @@ class WebWorkbenchTest(unittest.TestCase):
     def test_story_pagination_out_of_range(self) -> None:
         """Out-of-range page returns empty items."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            app = create_api_app(store_root=tmpdir)
+            app = self._create_app(tmpdir)
             store = app.service.workspaces
             with store.database.connection() as conn:
                 cursor = conn.cursor()
@@ -1132,7 +1136,7 @@ class WebWorkbenchTest(unittest.TestCase):
     def test_task_pagination_returns_paginated_response(self) -> None:
         """GET /api/workspaces/:id/tasks with page/pageSize returns paginated response."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            app = create_api_app(store_root=tmpdir)
+            app = self._create_app(tmpdir)
             # Insert task records directly via database
             store = app.service.workspaces
             with store.database.connection() as conn:
@@ -1161,7 +1165,7 @@ class WebWorkbenchTest(unittest.TestCase):
     def test_task_pagination_with_filters(self) -> None:
         """Task pagination combined with owner/status filters."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            app = create_api_app(store_root=tmpdir)
+            app = self._create_app(tmpdir)
             store = app.service.workspaces
             with store.database.connection() as conn:
                 cursor = conn.cursor()

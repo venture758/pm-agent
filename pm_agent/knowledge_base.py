@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import re
 from datetime import datetime
-from pathlib import Path
 from typing import Iterable, Optional
 
 from openpyxl import load_workbook
 
+from .excel_io import ExcelInput, workbook_stream
 from .models import AssignmentHistoryEntry, ConfirmedAssignment, ModuleKnowledgeEntry, RequirementItem
 from .utils import familiarity_score, normalize_name, normalize_text, overlap_score, promote_familiarity, split_names, unique_list
 
@@ -24,8 +24,8 @@ def _choose_latest_module_sheet(sheet_names: list[str]) -> str:
     return sorted(candidates, reverse=True)[0][1]
 
 
-def import_module_knowledge_from_excel(path: str | Path, imported_at: Optional[str] = None) -> list[ModuleKnowledgeEntry]:
-    workbook = load_workbook(path, read_only=True, data_only=True)
+def import_module_knowledge_from_excel(source: ExcelInput, imported_at: Optional[str] = None) -> list[ModuleKnowledgeEntry]:
+    workbook = load_workbook(workbook_stream(source), read_only=True, data_only=True)
     sheet_name = _choose_latest_module_sheet(workbook.sheetnames)
     sheet = workbook[sheet_name]
     imported_at = imported_at or datetime.utcnow().isoformat()

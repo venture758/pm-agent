@@ -9,7 +9,7 @@ from pm_agent.workspace_store import WorkspaceStore
 def _create_test_store() -> WorkspaceStore:
     tmpdir = tempfile.mkdtemp()
     url = f"sqlite:///{tmpdir}/test.db"
-    store = WorkspaceStore(root=tmpdir, database_url=url)
+    store = WorkspaceStore(database_url=url)
     return store
 
 

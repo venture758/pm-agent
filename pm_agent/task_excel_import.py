@@ -3,11 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, datetime
 import re
-from pathlib import Path
 from typing import Any, Mapping
 
 from openpyxl import load_workbook
 
+from .excel_io import ExcelInput, workbook_stream
 from .utils import normalize_text, split_names
 
 CANONICAL_TASK_HEADERS: list[str] = [
@@ -190,8 +190,8 @@ def _parse_task_cell(header: str, value: Any) -> Any:
     return text or None
 
 
-def import_task_excel(path: str | Path) -> TaskExcelImportResult:
-    workbook = load_workbook(path, read_only=True, data_only=True)
+def import_task_excel(source: ExcelInput) -> TaskExcelImportResult:
+    workbook = load_workbook(workbook_stream(source), read_only=True, data_only=True)
     sheet = workbook[workbook.sheetnames[0]]
 
     header_row = next(sheet.iter_rows(min_row=1, max_row=1, values_only=True), ())

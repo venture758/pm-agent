@@ -2,18 +2,18 @@ from __future__ import annotations
 
 from dataclasses import asdict
 from datetime import datetime
-from pathlib import Path
 from typing import Iterable, Optional
 from uuid import uuid4
 
 from openpyxl import load_workbook
 
+from .excel_io import ExcelInput, workbook_source_label, workbook_stream
 from .models import AgentState, ImportBatch, StoryRecord, SyncAction, TaskRecord
 from .utils import normalize_text, parse_date, safe_float, split_names
 
 
-def _iter_sheet_rows(path: str | Path) -> tuple[list[str], list[dict[str, object]]]:
-    workbook = load_workbook(path, read_only=True, data_only=True)
+def _iter_sheet_rows(source: ExcelInput) -> tuple[list[str], list[dict[str, object]]]:
+    workbook = load_workbook(workbook_stream(source), read_only=True, data_only=True)
     sheet = workbook[workbook.sheetnames[0]]
     headers = [normalize_text(value) for value in next(sheet.iter_rows(min_row=1, max_row=1, values_only=True))]
     rows: list[dict[str, object]] = []
@@ -28,8 +28,8 @@ def _iter_sheet_rows(path: str | Path) -> tuple[list[str], list[dict[str, object
     return headers, rows
 
 
-def import_story_records(path: str | Path) -> list[StoryRecord]:
-    _, rows = _iter_sheet_rows(path)
+def import_story_records(source: ExcelInput) -> list[StoryRecord]:
+    _, rows = _iter_sheet_rows(source)
     stories: list[StoryRecord] = []
     for row in rows:
         code = normalize_text(row.get("用户故事编码"))
@@ -94,8 +94,8 @@ def import_story_records(path: str | Path) -> list[StoryRecord]:
     return stories
 
 
-def import_task_records(path: str | Path) -> list[TaskRecord]:
-    _, rows = _iter_sheet_rows(path)
+def import_task_records(source: ExcelInput) -> list[TaskRecord]:
+    _, rows = _iter_sheet_rows(source)
     tasks: list[TaskRecord] = []
     for row in rows:
         code = normalize_text(row.get("任务编号"))
@@ -154,17 +154,21 @@ def upsert_task_records(state: AgentState, tasks: Iterable[TaskRecord], batch: I
 
 def sync_platform_exports(
     state: AgentState,
-    story_excel_path: str | Path,
-    task_excel_path: str | Path,
+    story_excel: ExcelInput,
+    task_excel: ExcelInput,
+    source_files: Optional[list[str]] = None,
     imported_at: Optional[str] = None,
 ) -> ImportBatch:
     imported_at = imported_at or datetime.utcnow().isoformat()
     batch = ImportBatch(
         batch_id=f"batch-{uuid4().hex[:8]}",
         imported_at=imported_at,
-        source_files=[str(story_excel_path), str(task_excel_path)],
+        source_files=source_files or [
+            workbook_source_label(story_excel, "story.xlsx"),
+            workbook_source_label(task_excel, "task.xlsx"),
+        ],
     )
-    upsert_story_records(state, import_story_records(story_excel_path), batch)
-    upsert_task_records(state, import_task_records(task_excel_path), batch)
+    upsert_story_records(state, import_story_records(story_excel), batch)
+    upsert_task_records(state, import_task_records(task_excel), batch)
     state.import_batches.append(batch)
     return batch

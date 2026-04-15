@@ -3,7 +3,6 @@ from __future__ import annotations
 import logging
 from dataclasses import asdict, is_dataclass
 from datetime import datetime
-from pathlib import Path
 from typing import Any, Mapping
 from uuid import uuid4
 
@@ -17,7 +16,7 @@ from .intake import (
     parse_imported_requirements,
 )
 from .knowledge_base import import_module_knowledge_from_excel, match_requirement_to_modules, merge_module_entries
-from .models import KnowledgeUpdateRecord, MemberProfile, ModuleKnowledgeEntry, RequirementItem
+from .models import KnowledgeUpdateRecord, MemberProfile, ModuleKnowledgeEntry, RequirementItem, ChatSession
 from .story_excel_import import import_story_excel, row_to_story_record
 from .task_excel_import import import_task_excel, row_to_task_record
 from .utils import normalize_name, normalize_requirement_id, normalize_text, safe_float, split_names, unique_list
@@ -45,19 +44,17 @@ def _jsonable(value: Any) -> Any:
 class WorkspaceService:
     def __init__(
         self,
-        store_root: str | Path = ".pm_agent_store",
         database_url: str | None = None,
         dashscope_api_key: str = "",
     ) -> None:
         self.agent = ProjectManagerAgent(
-            store_root=store_root,
             database_url=database_url,
             dashscope_api_key=dashscope_api_key,
         )
-        self.workspaces = WorkspaceStore(root=store_root, database_url=database_url)
+        self.workspaces = WorkspaceStore(database_url=database_url)
 
     def get_workspace(self, workspace_id: str) -> dict[str, Any]:
-        return self._build_workspace_payload(self._load_workspace(workspace_id))
+        return self._build_workspace_payload_light(self._load_workspace(workspace_id))
 
     def update_draft(self, workspace_id: str, payload: Mapping[str, Any]) -> dict[str, Any]:
         workspace = self._load_workspace(workspace_id)
@@ -96,12 +93,18 @@ class WorkspaceService:
         if not workspace.current_session_id:
             workspace.current_session_id = self._new_session_id()
 
-        # Append user message to history
+        # Ensure active session exists
+        active_session = self._ensure_active_session(workspace)
+
+        # Append user message to history (both active session and legacy chat_messages)
         user_msg = {
             "role": "user",
             "content": user_message,
             "timestamp": datetime.utcnow().isoformat(),
         }
+        active_session.messages.append(user_msg)
+        active_session.last_active_at = datetime.utcnow().isoformat()
+        active_session.last_message_preview = user_message[:50]
         workspace.chat_messages.append(user_msg)
 
         # Call LLM to parse
@@ -114,13 +117,14 @@ class WorkspaceService:
         requirements, reply = self.agent.parse_requirements_with_llm(user_message, profiles, task_history=task_history, task_records=task_records)
         logger.info("[chat] LLM 返回完成 workspace_id=%s 需求数=%d reply_len=%d", workspace_id, len(requirements), len(reply))
 
-        # Append assistant reply
+        # Append assistant reply (both active session and legacy)
         assistant_msg = {
             "role": "assistant",
             "content": reply,
             "timestamp": datetime.utcnow().isoformat(),
             "parsed_requirements": [_jsonable(r) for r in requirements],
         }
+        active_session.messages.append(assistant_msg)
         workspace.chat_messages.append(assistant_msg)
 
         for req in requirements:
@@ -143,6 +147,113 @@ class WorkspaceService:
         logger.info("[chat] 保存工作区 workspace_id=%s", workspace_id)
         self.workspaces.save_workspace(workspace)
         return self._build_workspace_payload(workspace)
+
+    def create_chat_session(self, workspace_id: str, payload: Mapping[str, Any]) -> dict[str, Any]:
+        workspace = self._load_workspace(workspace_id)
+        now = datetime.utcnow().isoformat()
+        session_id = self._new_session_id().replace("session-", "cs-")
+        new_session = ChatSession(
+            session_id=session_id,
+            created_at=now,
+            last_active_at=now,
+            status="active",
+            messages=[],
+            requirement_ids=[],
+            last_message_preview="",
+        )
+        # Mark current active session as archived (if exists)
+        for s in workspace.chat_sessions:
+            if s.status == "active":
+                s.status = "archived"
+        workspace.chat_sessions.append(new_session)
+        workspace.active_session_id = session_id
+        workspace.current_session_requirement_ids = []
+        workspace.updated_at = now
+        self.workspaces.save_workspace(workspace)
+        return {
+            "session_id": session_id,
+            "created_at": now,
+            "last_active_at": now,
+            "status": "active",
+            "messages": [],
+            "requirement_ids": [],
+            "active_session_id": workspace.active_session_id,
+        }
+
+    def list_chat_sessions(self, workspace_id: str) -> dict[str, Any]:
+        workspace = self._load_workspace(workspace_id)
+        sessions = sorted(
+            workspace.chat_sessions,
+            key=lambda s: s.last_active_at,
+            reverse=True,
+        )
+        # Only show sessions that have actual messages (exclude empty "new conversation" drafts)
+        visible_sessions = [s for s in sessions if s.last_message_preview]
+        return {
+            "active_session_id": workspace.active_session_id,
+            "sessions": [
+                {
+                    "session_id": s.session_id,
+                    "created_at": s.created_at,
+                    "last_active_at": s.last_active_at,
+                    "status": s.status,
+                    "message_count": len(s.messages),
+                    "last_message_preview": s.last_message_preview,
+                    "requirement_count": len(s.requirement_ids),
+                }
+                for s in visible_sessions
+            ],
+        }
+
+    def get_chat_session_messages(self, workspace_id: str, session_id: str) -> dict[str, Any]:
+        workspace = self._load_workspace(workspace_id)
+        session = None
+        for s in workspace.chat_sessions:
+            if s.session_id == session_id:
+                session = s
+                break
+        if session is None:
+            raise ValueError(f"会话不存在: {session_id}")
+        return {
+            "session_id": session.session_id,
+            "created_at": session.created_at,
+            "last_active_at": session.last_active_at,
+            "status": session.status,
+            "messages": session.messages,
+            "requirement_ids": session.requirement_ids,
+        }
+
+    def delete_chat_session(self, workspace_id: str, session_id: str) -> dict[str, Any]:
+        workspace = self._load_workspace(workspace_id)
+        # Find and remove the session
+        new_sessions = [s for s in workspace.chat_sessions if s.session_id != session_id]
+        if len(new_sessions) == len(workspace.chat_sessions):
+            raise ValueError(f"会话不存在: {session_id}")
+        workspace.chat_sessions = new_sessions
+
+        # If the deleted session was active, switch to the latest active session
+        if workspace.active_session_id == session_id:
+            active_sessions = [s for s in workspace.chat_sessions if s.status == "active"]
+            if active_sessions:
+                latest = max(active_sessions, key=lambda s: s.last_active_at)
+                workspace.active_session_id = latest.session_id
+            else:
+                workspace.active_session_id = ""
+
+        workspace.updated_at = datetime.utcnow().isoformat()
+        self.workspaces.save_workspace(workspace)
+
+        # Return the updated active session messages
+        new_active_session = None
+        if workspace.active_session_id:
+            for s in workspace.chat_sessions:
+                if s.session_id == workspace.active_session_id:
+                    new_active_session = s
+                    break
+        return {
+            "active_session_id": workspace.active_session_id,
+            "messages": new_active_session.messages if new_active_session else [],
+        }
 
     def list_module_entries(self, workspace_id: str, query: Mapping[str, Any] | None = None) -> dict[str, Any]:
         workspace = self._load_workspace(workspace_id)
@@ -352,6 +463,22 @@ class WorkspaceService:
         workspace.recommendations = []
         workspace.current_session_id = ""
         workspace.current_session_requirement_ids = []
+        # Mark active session as confirmed, create new one
+        now = datetime.utcnow().isoformat()
+        for s in workspace.chat_sessions:
+            if s.session_id == workspace.active_session_id and s.status == "active":
+                s.status = "confirmed"
+                break
+        new_session = ChatSession(
+            session_id=self._new_session_id().replace("session-", "cs-"),
+            created_at=now,
+            last_active_at=now,
+            status="active",
+            messages=[],
+            requirement_ids=[],
+        )
+        workspace.chat_sessions.append(new_session)
+        workspace.active_session_id = new_session.session_id
         workspace.handoff_stories = []
         workspace.handoff_tasks = []
         workspace.messages = [f"已确认 {len(confirmed)} 条需求，已记录确认结果（未进入平台同步）"]
@@ -380,8 +507,8 @@ class WorkspaceService:
 
     def upload_module_knowledge(self, workspace_id: str, filename: str, content: bytes) -> dict[str, Any]:
         workspace = self._load_workspace(workspace_id)
-        upload = self.workspaces.save_upload(workspace_id, "module-knowledge", filename, content)
-        imported_entries = import_module_knowledge_from_excel(upload.stored_path)
+        upload = self.workspaces.record_upload(workspace_id, "module-knowledge", filename, content)
+        imported_entries = import_module_knowledge_from_excel(content)
         if not workspace.managed_members:
             raise ValueError("请先在人员管理页面维护成员，再导入业务模块知识库")
         valid_names = self._managed_member_name_set(workspace)
@@ -402,9 +529,13 @@ class WorkspaceService:
         task_file: tuple[str, bytes],
     ) -> dict[str, Any]:
         workspace = self._load_workspace(workspace_id)
-        story_upload = self.workspaces.save_upload(workspace_id, "story-export", story_file[0], story_file[1])
-        task_upload = self.workspaces.save_upload(workspace_id, "task-export", task_file[0], task_file[1])
-        batch = self.agent.sync_daily_exports(story_upload.stored_path, task_upload.stored_path)
+        story_upload = self.workspaces.record_upload(workspace_id, "story-export", story_file[0], story_file[1])
+        task_upload = self.workspaces.record_upload(workspace_id, "task-export", task_file[0], task_file[1])
+        batch = self.agent.sync_daily_exports(
+            story_file[1],
+            task_file[1],
+            source_files=[story_file[0], task_file[0]],
+        )
         workspace.uploads.extend([story_upload, task_upload])
         workspace.latest_sync_batch = batch
         workspace.messages = [f"平台同步完成，批次 {batch.batch_id} 共 {len(batch.actions)} 个动作"]
@@ -418,8 +549,8 @@ class WorkspaceService:
         story_file: tuple[str, bytes],
     ) -> dict[str, Any]:
         workspace = self._load_workspace(workspace_id)
-        story_upload = self.workspaces.save_upload(workspace_id, "story-export-only", story_file[0], story_file[1])
-        parsed = import_story_excel(story_upload.stored_path)
+        story_upload = self.workspaces.record_upload(workspace_id, "story-export-only", story_file[0], story_file[1])
+        parsed = import_story_excel(story_file[1])
         created_count, updated_count = self.workspaces.upsert_story_records_to_table(
             workspace_id=workspace_id,
             story_rows=parsed.valid_rows,
@@ -452,8 +583,8 @@ class WorkspaceService:
         task_file: tuple[str, bytes],
     ) -> dict[str, Any]:
         workspace = self._load_workspace(workspace_id)
-        task_upload = self.workspaces.save_upload(workspace_id, "task-export-only", task_file[0], task_file[1])
-        parsed = import_task_excel(task_upload.stored_path)
+        task_upload = self.workspaces.record_upload(workspace_id, "task-export-only", task_file[0], task_file[1])
+        parsed = import_task_excel(task_file[1])
         created_count, updated_count = self.workspaces.upsert_task_records_to_table(
             workspace_id=workspace_id,
             task_rows=parsed.valid_rows,
@@ -652,6 +783,27 @@ class WorkspaceService:
     def _new_session_id(self) -> str:
         return f"session-{uuid4().hex[:12]}"
 
+    def _ensure_active_session(self, workspace: WorkspaceState) -> ChatSession:
+        """Return the active session, creating one if needed."""
+        if workspace.active_session_id:
+            for s in workspace.chat_sessions:
+                if s.session_id == workspace.active_session_id and s.status == "active":
+                    return s
+        # No active session found, create one
+        now = datetime.utcnow().isoformat()
+        session_id = self._new_session_id().replace("session-", "cs-")
+        new_session = ChatSession(
+            session_id=session_id,
+            created_at=now,
+            last_active_at=now,
+            status="active",
+            messages=[],
+            requirement_ids=[],
+        )
+        workspace.chat_sessions.append(new_session)
+        workspace.active_session_id = session_id
+        return new_session
+
     def _normalized_session_ids(self, requirement_ids: list[Any] | None) -> list[str]:
         normalized_ids: list[str] = []
         for item in requirement_ids or []:
@@ -680,6 +832,17 @@ class WorkspaceService:
             if normalized and normalized not in current_ids:
                 current_ids.append(normalized)
         workspace.current_session_requirement_ids = current_ids
+        # Also register to active session
+        if workspace.active_session_id:
+            for s in workspace.chat_sessions:
+                if s.session_id == workspace.active_session_id:
+                    existing = set(s.requirement_ids)
+                    for requirement in requirements:
+                        normalized = normalize_requirement_id(requirement.requirement_id)
+                        if normalized and normalized not in existing:
+                            s.requirement_ids.append(normalized)
+                            existing.add(normalized)
+                    break
 
     def _merge_workspace_requirements(
         self,
@@ -983,6 +1146,26 @@ class WorkspaceService:
             "sample_keys": [entry.key for entry in entries[:5]],
         }
 
+    def _build_workspace_payload_light(self, workspace: WorkspaceState) -> dict[str, Any]:
+        """Lightweight payload for initial workspace load — only core state needed at startup."""
+        return {
+            "workspace_id": workspace.workspace_id,
+            "title": workspace.title or workspace.workspace_id,
+            "updated_at": workspace.updated_at,
+            "draft": {
+                "draft_mode": workspace.draft_mode,
+                "message_text": workspace.message_text,
+                "requirement_rows": workspace.requirement_rows,
+                "team_rows": [],
+                "chat_messages": workspace.chat_messages,
+                "current_session_id": workspace.current_session_id,
+                "current_session_requirement_ids": workspace.current_session_requirement_ids,
+            },
+            "active_session_id": workspace.active_session_id,
+            "requirements": _jsonable(workspace.normalized_requirements),
+            "messages": list(workspace.messages),
+        }
+
     def _build_workspace_payload(
         self,
         workspace: WorkspaceState,
@@ -1014,6 +1197,18 @@ class WorkspaceService:
                 "current_session_id": workspace.current_session_id,
                 "current_session_requirement_ids": workspace.current_session_requirement_ids,
             },
+            "active_session_id": workspace.active_session_id,
+            "session_list": [
+                {
+                    "session_id": s.session_id,
+                    "created_at": s.created_at,
+                    "last_active_at": s.last_active_at,
+                    "status": s.status,
+                    "message_count": len(s.messages),
+                    "last_message_preview": s.last_message_preview,
+                }
+                for s in sorted(workspace.chat_sessions, key=lambda s: s.last_active_at, reverse=True)
+            ],
             "requirements": _jsonable(workspace.normalized_requirements),
             "members": _jsonable(workspace.member_profiles),
             "managed_members": _jsonable(workspace.managed_members),

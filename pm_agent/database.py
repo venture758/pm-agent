@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Iterator
 from urllib.parse import parse_qs, unquote, urlparse
 
-from .config import DEFAULT_DATABASE_FILENAME, DEFAULT_MYSQL_DDL_PATH, DEFAULT_STATE_ROOT
+from .config import DEFAULT_MYSQL_DDL_PATH
 
 
 def _json_default(obj: Any) -> Any:
@@ -21,9 +21,7 @@ def _json_default(obj: Any) -> Any:
 
 
 class DatabaseStore:
-    def __init__(self, root: str | Path = DEFAULT_STATE_ROOT, database_url: str | None = None) -> None:
-        self.root = Path(root)
-        self.root.mkdir(parents=True, exist_ok=True)
+    def __init__(self, database_url: str | None = None) -> None:
         self.database_url = self._resolve_database_url(database_url)
         self.scheme, self.connection_config = self._parse_database_url(self.database_url)
         self.mysql_driver: str | None = None
@@ -34,11 +32,12 @@ class DatabaseStore:
             self._ensure_sqlite_schema()
 
     def _resolve_database_url(self, database_url: str | None) -> str:
-        candidate = database_url or os.getenv("PM_AGENT_DATABASE_URL")
+        candidate = database_url
+        if candidate is None:
+            candidate = os.environ.get("PM_AGENT_DATABASE_URL")
         if candidate:
             return str(candidate)
-        db_path = (self.root / DEFAULT_DATABASE_FILENAME).resolve()
-        return f"sqlite:///{db_path}"
+        raise ValueError("缺少数据库连接配置：请传入 database_url 或设置 PM_AGENT_DATABASE_URL")
 
     def _parse_database_url(self, database_url: str) -> tuple[str, dict[str, Any]]:
         parsed = urlparse(database_url)

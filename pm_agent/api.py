@@ -33,13 +33,11 @@ logger = logging.getLogger(__name__)
 class ApiApplication:
     def __init__(
         self,
-        store_root: str | Path = ".pm_agent_store",
         static_root: str | Path = "frontend/dist",
         database_url: str | None = None,
         dashscope_api_key: str = "",
     ) -> None:
         self.service = WorkspaceService(
-            store_root=store_root,
             database_url=database_url,
             dashscope_api_key=dashscope_api_key,
         )
@@ -164,6 +162,15 @@ class ApiApplication:
             result = self.service.send_chat_message(workspace_id, payload)
             logger.info("[chat.api] chat 响应完成 workspace_id=%s", workspace_id)
             return 200, result
+        if len(segments) == 5 and segments[3] == "chat" and segments[4] == "sessions" and method == "POST":
+            payload = self._read_json_body(environ)
+            return 200, self.service.create_chat_session(workspace_id, payload)
+        if len(segments) == 5 and segments[3] == "chat" and segments[4] == "sessions" and method == "GET":
+            return 200, self.service.list_chat_sessions(workspace_id)
+        if len(segments) == 6 and segments[3] == "chat" and segments[4] == "sessions" and method == "GET":
+            return 200, self.service.get_chat_session_messages(workspace_id, segments[5])
+        if len(segments) == 6 and segments[3] == "chat" and segments[4] == "sessions" and method == "DELETE":
+            return 200, self.service.delete_chat_session(workspace_id, segments[5])
         raise ValueError("不支持的 API 请求")
 
     def _read_json_body(self, environ: dict[str, Any]) -> dict[str, Any]:
@@ -232,13 +239,11 @@ class ApiApplication:
 
 
 def create_api_app(
-    store_root: str | Path = ".pm_agent_store",
     static_root: str | Path = "frontend/dist",
     database_url: str | None = None,
     dashscope_api_key: str = "",
 ) -> ApiApplication:
     return ApiApplication(
-        store_root=store_root,
         static_root=static_root,
         database_url=database_url,
         dashscope_api_key=dashscope_api_key,

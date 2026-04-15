@@ -1,46 +1,28 @@
 from __future__ import annotations
 
 import json
-import re
 from dataclasses import asdict
 from datetime import datetime
 from decimal import Decimal
-from pathlib import Path
 from typing import Any
-from uuid import uuid4
 
-from .config import DEFAULT_STATE_ROOT
 from .database import DatabaseStore
 from .models import AssignmentRecommendation, KnowledgeUpdateRecord, MemberProfile, ModuleKnowledgeEntry, StoryRecord
 from .story_excel_import import STORY_DB_COLUMNS, row_to_story_record
 from .task_excel_import import TASK_DB_COLUMNS, row_to_task_record
+from .utils import normalize_requirement_id
+from .workspace_models import WorkspaceState, WorkspaceUpload
 
 
 def _json_default(obj: Any) -> Any:
     if isinstance(obj, Decimal):
         return float(obj)
     raise TypeError(f"Object of type {obj.__class__.__name__} is not JSON serializable")
-from .utils import normalize_requirement_id
-from .workspace_models import WorkspaceState, WorkspaceUpload
 
 
 class WorkspaceStore:
-    def __init__(self, root: str | Path = DEFAULT_STATE_ROOT, database_url: str | None = None) -> None:
-        self.base_root = Path(root)
-        self.root = self.base_root / "workspaces"
-        self.root.mkdir(parents=True, exist_ok=True)
-        self.database = DatabaseStore(root=self.base_root, database_url=database_url)
-        self._migrate_legacy_workspaces_if_needed()
-
-    def workspace_dir(self, workspace_id: str) -> Path:
-        directory = self.root / workspace_id
-        directory.mkdir(parents=True, exist_ok=True)
-        return directory
-
-    def uploads_dir(self, workspace_id: str) -> Path:
-        directory = self.workspace_dir(workspace_id) / "uploads"
-        directory.mkdir(parents=True, exist_ok=True)
-        return directory
+    def __init__(self, database_url: str | None = None) -> None:
+        self.database = DatabaseStore(database_url=database_url)
 
     def load_workspace(self, workspace_id: str) -> WorkspaceState:
         payload = self.database.load_json("workspace_states", "workspace_id", workspace_id)
@@ -281,33 +263,13 @@ class WorkspaceStore:
             item["knowledge_update"] = session_mapping.get(item["session_id"])
         return items, total
 
-    def save_upload(self, workspace_id: str, kind: str, filename: str, content: bytes) -> WorkspaceUpload:
-        target_dir = self.uploads_dir(workspace_id) / kind
-        target_dir.mkdir(parents=True, exist_ok=True)
-        safe_name = re.sub(r"[^A-Za-z0-9._-]+", "-", filename).strip("-") or f"{kind}.bin"
-        target_path = target_dir / f"{uuid4().hex[:8]}-{safe_name}"
-        target_path.write_bytes(content)
+    def record_upload(self, workspace_id: str, kind: str, filename: str, content: bytes) -> WorkspaceUpload:
         return WorkspaceUpload(
             kind=kind,
             original_name=filename,
-            stored_path=str(target_path),
+            file_size=len(content),
+            storage_backend="database",
         )
-
-    def _migrate_legacy_workspaces_if_needed(self) -> None:
-        for workspace_file in self.root.glob("*/workspace.json"):
-            workspace_id = workspace_file.parent.name
-            if self.database.load_json("workspace_states", "workspace_id", workspace_id) is not None:
-                continue
-            payload = json.loads(workspace_file.read_text(encoding="utf-8"))
-            workspace = WorkspaceState.from_dict(payload)
-            workspace.current_session_requirement_ids = self._normalize_session_ids(workspace.current_session_requirement_ids)
-            normalized_payload = asdict(workspace)
-            normalized_payload["managed_members"] = []
-            normalized_payload["recommendations"] = []
-            self.database.save_json("workspace_states", "workspace_id", workspace_id, normalized_payload)
-            self._save_managed_members_to_table(workspace_id, workspace.managed_members, workspace.updated_at)
-            self._save_module_entries_to_table(workspace_id, workspace.module_entries, workspace.updated_at)
-            self._save_recommendations_to_table(workspace_id, workspace.recommendations, workspace.updated_at)
 
     def _load_managed_members_from_table(self, workspace_id: str) -> list[MemberProfile]:
         sql = (

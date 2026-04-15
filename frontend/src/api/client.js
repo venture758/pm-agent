@@ -166,10 +166,29 @@ export const apiClient = {
   getInsightHistory(workspaceId) {
     return request(`/api/workspaces/${workspaceId}/insights/history`);
   },
-  sendChatMessage(workspaceId, message) {
+  sendChatMessage(workspaceId, message, sessionId = null) {
+    const body = { message };
+    if (sessionId) {
+      body.session_id = sessionId;
+    }
     return request(`/api/workspaces/${workspaceId}/chat`, {
       method: "POST",
-      body: JSON.stringify({ message }),
+      body: JSON.stringify(body),
     });
+  },
+  createChatSession(workspaceId, payload = {}) {
+    return request(`/api/workspaces/${workspaceId}/chat/sessions`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+  listChatSessions(workspaceId) {
+    return request(`/api/workspaces/${workspaceId}/chat/sessions`);
+  },
+  getChatSession(workspaceId, sessionId) {
+    return request(`/api/workspaces/${workspaceId}/chat/sessions/${sessionId}`);
+  },
+  deleteChatSession(workspaceId, sessionId) {
+    return request(`/api/workspaces/${workspaceId}/chat/sessions/${sessionId}`, { method: "DELETE" });
   },
 };

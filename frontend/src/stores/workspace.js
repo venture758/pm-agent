@@ -44,6 +44,8 @@ const EMPTY_WORKSPACE = () => ({
   },
   latest_knowledge_update: null,
   group_reply_preview: "",
+  active_session_id: "",
+  session_list: [],
 });
 
 export const useWorkspaceStore = defineStore("workspace", {
@@ -73,6 +75,8 @@ export const useWorkspaceStore = defineStore("workspace", {
       total: 0,
       total_pages: 0,
     },
+    chatSessions: [],
+    activeSessionId: "",
     storyPagination: {
       items: [],
       page: 1,
@@ -98,6 +102,11 @@ export const useWorkspaceStore = defineStore("workspace", {
         ...payload,
       };
       this.workspaceId = payload.workspace_id || this.workspaceId;
+      this.activeSessionId = payload.active_session_id || this.activeSessionId;
+      this.session_list = payload.session_list || [];
+      if (payload.active_session_id && !this.activeSessionId) {
+        this.activeSessionId = payload.active_session_id;
+      }
       const modulePage = payload.module_page || {};
       const filters = modulePage.filters || {};
       this.moduleQuery = {
@@ -434,6 +443,68 @@ export const useWorkspaceStore = defineStore("workspace", {
         this.applyWorkspace(result);
         this.error = "";
         return result;
+      } catch (error) {
+        this.error = error.message;
+        throw error;
+      } finally {
+        this.loading = false;
+      }
+    },
+    async createNewSession() {
+      this.loading = true;
+      try {
+        const result = await apiClient.createChatSession(this.workspaceId);
+        this.activeSessionId = result.session_id;
+        this.session_list = (result.session_list || this.session_list);
+        this.error = "";
+        return result;
+      } catch (error) {
+        this.error = error.message;
+        throw error;
+      } finally {
+        this.loading = false;
+      }
+    },
+    async switchSession(sessionId) {
+      this.loading = true;
+      try {
+        const result = await apiClient.getChatSession(this.workspaceId, sessionId);
+        // Update workspace draft with the session's messages
+        this.workspace.draft.chat_messages = result.messages || [];
+        this.activeSessionId = sessionId;
+        this.error = "";
+        return result;
+      } catch (error) {
+        this.error = error.message;
+        throw error;
+      } finally {
+        this.loading = false;
+      }
+    },
+    async loadSessions() {
+      try {
+        const result = await apiClient.listChatSessions(this.workspaceId);
+        this.session_list = result.sessions || [];
+        this.activeSessionId = result.active_session_id || this.activeSessionId;
+        // Do not load active session messages — always show empty "new conversation" on page load
+        this.workspace.draft.chat_messages = [];
+        this.error = "";
+      } catch (error) {
+        this.error = error.message;
+        throw error;
+      }
+    },
+    async deleteSession(sessionId) {
+      this.loading = true;
+      try {
+        const result = await apiClient.deleteChatSession(this.workspaceId, sessionId);
+        // Update active session and messages if the deleted one was active
+        this.activeSessionId = result.active_session_id || "";
+        this.workspace.draft.chat_messages = result.messages || [];
+        // Reload session list
+        const sessionsResult = await apiClient.listChatSessions(this.workspaceId);
+        this.session_list = sessionsResult.sessions || [];
+        this.error = "";
       } catch (error) {
         this.error = error.message;
         throw error;

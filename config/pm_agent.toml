@@ -1,0 +1,16 @@
+[default]
+host = "127.0.0.1"
+port = 8000
+static_root = "frontend/dist"
+
+[dev]
+database_url = "mysql://root:@Admin123456@127.0.0.1:3306/pm_agent?charset=utf8mb4"
+nvidia_api_key = "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"
+
+[test]
+database_url = ""
+nvidia_api_key = ""
+
+[prod]
+database_url = ""
+nvidia_api_key = ""
