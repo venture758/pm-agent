@@ -101,6 +101,18 @@ class ApiApplication:
             page = int(self._read_query(environ).get("page") or 1)
             page_size = int(self._read_query(environ).get("pageSize") or 20)
             return 200, self.service.list_confirmation_records(workspace_id, page, page_size)
+        if (
+            len(segments) == 8
+            and segments[3] == "confirmations"
+            and segments[5] == "requirements"
+            and segments[7] == "knowledge-update-modules"
+            and method == "GET"
+        ):
+            return 200, self.service.get_knowledge_update_module_diff_records(
+                workspace_id,
+                segments[4],
+                _unquote_utf8(segments[6]),
+            )
         if len(segments) == 4 and segments[3] == "stories" and method == "GET":
             page = int(self._read_query(environ).get("page") or 1)
             page_size = int(self._read_query(environ).get("pageSize") or 20)

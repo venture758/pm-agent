@@ -16,7 +16,15 @@ from .intake import (
     parse_imported_requirements,
 )
 from .knowledge_base import import_module_knowledge_from_excel, match_requirement_to_modules, merge_module_entries
-from .models import KnowledgeUpdateRecord, MemberProfile, ModuleKnowledgeEntry, RequirementItem, ChatSession
+from .models import (
+    ChatSession,
+    ConfirmedAssignment,
+    KnowledgeUpdateModuleDiffRecord,
+    KnowledgeUpdateRecord,
+    MemberProfile,
+    ModuleKnowledgeEntry,
+    RequirementItem,
+)
 from .repositories import ChatRepository, RequirementRepository, WorkspaceMetaRepository
 from .story_excel_import import import_story_excel, row_to_story_record
 from .task_excel_import import import_task_excel, row_to_task_record
@@ -471,9 +479,22 @@ class WorkspaceService:
         if not workspace.recommendations:
             raise ValueError("当前工作区没有可确认的推荐结果")
         self._sync_workspace_modules_to_agent(workspace)
+        before_module_snapshots = {
+            entry.key: self._module_entry_snapshot(entry)
+            for entry in workspace.module_entries
+        }
         session_id = workspace.current_session_id or self._new_session_id()
         confirmed = self.agent.confirm(workspace.recommendations, actions)
         workspace.module_entries = self._sorted_module_entries(self.agent.state.module_entries.values())
+        workspace.updated_at = datetime.utcnow().isoformat()
+        module_diff_records = self._build_knowledge_update_module_diff_records(
+            workspace_id=workspace.workspace_id,
+            session_id=session_id,
+            confirmed_assignments=confirmed,
+            before_snapshots=before_module_snapshots,
+            after_entries={entry.key: entry for entry in workspace.module_entries},
+            created_at=workspace.updated_at,
+        )
         workspace.confirmed_assignments = confirmed
         workspace.recommendations = []
         workspace.current_session_id = ""
@@ -497,7 +518,6 @@ class WorkspaceService:
         workspace.handoff_stories = []
         workspace.handoff_tasks = []
         workspace.messages = [f"已确认 {len(confirmed)} 条需求，已记录确认结果（未进入平台同步）"]
-        workspace.updated_at = datetime.utcnow().isoformat()
         knowledge_update = self.agent.generate_knowledge_update_suggestions(confirmed_assignments=confirmed)
         knowledge_record = KnowledgeUpdateRecord(
             workspace_id=workspace.workspace_id,
@@ -507,6 +527,11 @@ class WorkspaceService:
             knowledge_updates=dict(knowledge_update.get("knowledge_updates") or {}),
             optimization_suggestions=list(knowledge_update.get("optimization_suggestions") or []),
             error_message=str(knowledge_update.get("error_message") or ""),
+            has_module_diff_records=bool(module_diff_records),
+            module_change_count=len(module_diff_records),
+            requirement_change_count=len({record.requirement_id for record in module_diff_records}),
+            requirement_summaries=self._summarize_module_diff_records(module_diff_records),
+            module_diff_records=[_jsonable(record) for record in module_diff_records],
             triggered_at=workspace.updated_at,
         )
         workspace.latest_knowledge_update = knowledge_record
@@ -517,6 +542,7 @@ class WorkspaceService:
             created_at=workspace.updated_at,
         )
         self.workspaces.append_knowledge_update_record(knowledge_record)
+        self.workspaces.append_knowledge_update_module_diff_records(module_diff_records)
         self.workspaces.save_workspace(workspace)
         return self._build_workspace_payload(workspace)
 
@@ -732,6 +758,25 @@ class WorkspaceService:
             "page_size": page_size,
             "total": total,
             "total_pages": total_pages,
+        }
+
+    def get_knowledge_update_module_diff_records(
+        self,
+        workspace_id: str,
+        session_id: str,
+        requirement_id: str,
+    ) -> dict[str, Any]:
+        items = self.workspaces.load_knowledge_update_module_diff_records(
+            workspace_id=workspace_id,
+            session_id=session_id,
+            requirement_id=requirement_id,
+        )
+        return {
+            "workspace_id": workspace_id,
+            "session_id": session_id,
+            "requirement_id": requirement_id,
+            "items": items,
+            "total": len(items),
         }
 
     def _load_workspace(self, workspace_id: str) -> WorkspaceState:
@@ -1154,6 +1199,122 @@ class WorkspaceService:
     def _sorted_members(self, members: Any) -> list[MemberProfile]:
         return sorted(list(members), key=lambda item: item.name)
 
+    def _module_entry_snapshot(self, entry: ModuleKnowledgeEntry) -> dict[str, Any]:
+        return {
+            "key": entry.key,
+            "big_module": entry.big_module,
+            "function_module": entry.function_module,
+            "primary_owner": entry.primary_owner,
+            "backup_owners": list(entry.backup_owners),
+            "familiar_members": list(entry.familiar_members),
+            "aware_members": list(entry.aware_members),
+            "unfamiliar_members": list(entry.unfamiliar_members),
+            "recent_assignees": list(entry.recent_assignees),
+            "suggested_familiarity": dict(entry.suggested_familiarity),
+            "assignment_history": _jsonable(entry.assignment_history),
+        }
+
+    def _build_module_snapshot_diff(
+        self,
+        before_snapshot: dict[str, Any],
+        after_snapshot: dict[str, Any],
+    ) -> tuple[bool, dict[str, Any]]:
+        added_fields: list[dict[str, Any]] = []
+        removed_fields: list[dict[str, Any]] = []
+        modified_fields: list[dict[str, Any]] = []
+        all_keys = sorted(set(before_snapshot) | set(after_snapshot))
+        for field in all_keys:
+            before_exists = field in before_snapshot
+            after_exists = field in after_snapshot
+            if not before_exists and after_exists:
+                added_fields.append({"field": field, "after": after_snapshot.get(field)})
+                continue
+            if before_exists and not after_exists:
+                removed_fields.append({"field": field, "before": before_snapshot.get(field)})
+                continue
+            if before_snapshot.get(field) != after_snapshot.get(field):
+                modified_fields.append(
+                    {
+                        "field": field,
+                        "before": before_snapshot.get(field),
+                        "after": after_snapshot.get(field),
+                    }
+                )
+        changed = bool(added_fields or removed_fields or modified_fields)
+        return changed, {
+            "changed": changed,
+            "changed_field_count": len(added_fields) + len(removed_fields) + len(modified_fields),
+            "added_fields": added_fields,
+            "removed_fields": removed_fields,
+            "modified_fields": modified_fields,
+        }
+
+    def _build_knowledge_update_module_diff_records(
+        self,
+        *,
+        workspace_id: str,
+        session_id: str,
+        confirmed_assignments: list[ConfirmedAssignment],
+        before_snapshots: Mapping[str, dict[str, Any]],
+        after_entries: Mapping[str, ModuleKnowledgeEntry],
+        created_at: str,
+    ) -> list[KnowledgeUpdateModuleDiffRecord]:
+        records: list[KnowledgeUpdateModuleDiffRecord] = []
+        seen_pairs: set[tuple[str, str]] = set()
+        for assignment in confirmed_assignments:
+            module_key = str(assignment.module_key or "").strip()
+            requirement_id = normalize_requirement_id(assignment.requirement_id) or str(assignment.requirement_id or "").strip()
+            if not module_key or not requirement_id:
+                continue
+            pair = (requirement_id, module_key)
+            if pair in seen_pairs:
+                continue
+            seen_pairs.add(pair)
+            before_snapshot = dict(before_snapshots.get(module_key) or {})
+            after_entry = after_entries.get(module_key)
+            if not before_snapshot and after_entry is None:
+                continue
+            after_snapshot = self._module_entry_snapshot(after_entry) if after_entry else {}
+            changed, diff_summary = self._build_module_snapshot_diff(before_snapshot, after_snapshot)
+            records.append(
+                KnowledgeUpdateModuleDiffRecord(
+                    workspace_id=workspace_id,
+                    session_id=session_id,
+                    requirement_id=requirement_id,
+                    requirement_title=str(assignment.title or ""),
+                    module_key=module_key,
+                    changed=changed,
+                    before_snapshot=before_snapshot,
+                    after_snapshot=after_snapshot,
+                    diff_summary=diff_summary,
+                    created_at=created_at,
+                )
+            )
+        return records
+
+    def _summarize_module_diff_records(
+        self,
+        records: list[KnowledgeUpdateModuleDiffRecord],
+    ) -> list[dict[str, Any]]:
+        grouped: dict[str, dict[str, Any]] = {}
+        for record in records:
+            summary = grouped.setdefault(
+                record.requirement_id,
+                {
+                    "requirement_id": record.requirement_id,
+                    "requirement_title": record.requirement_title,
+                    "module_count": 0,
+                    "changed_module_count": 0,
+                    "module_keys": [],
+                },
+            )
+            summary["module_count"] += 1
+            if record.changed:
+                summary["changed_module_count"] += 1
+            if record.module_key and record.module_key not in summary["module_keys"]:
+                summary["module_keys"].append(record.module_key)
+        return list(grouped.values())
+
     def _knowledge_base_summary(self, workspace: WorkspaceState) -> dict[str, Any]:
         entries = list(workspace.module_entries)
         return {
@@ -1178,6 +1339,7 @@ class WorkspaceService:
             },
             "active_session_id": workspace.active_session_id,
             "requirements": _jsonable(workspace.normalized_requirements),
+            "latest_knowledge_update": _jsonable(workspace.latest_knowledge_update),
             "messages": list(workspace.messages),
         }
 

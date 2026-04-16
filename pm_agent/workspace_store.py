@@ -7,7 +7,15 @@ from decimal import Decimal
 from typing import Any
 
 from .database import DatabaseStore
-from .models import AssignmentRecommendation, KnowledgeUpdateRecord, MemberProfile, ModuleKnowledgeEntry, RequirementItem, StoryRecord
+from .models import (
+    AssignmentRecommendation,
+    KnowledgeUpdateModuleDiffRecord,
+    KnowledgeUpdateRecord,
+    MemberProfile,
+    ModuleKnowledgeEntry,
+    RequirementItem,
+    StoryRecord,
+)
 from .repositories import ChatRepository, RequirementRepository, WorkspaceMetaRepository
 from .story_excel_import import STORY_DB_COLUMNS, row_to_story_record
 from .task_excel_import import TASK_DB_COLUMNS, row_to_task_record
@@ -153,11 +161,49 @@ class WorkspaceStore:
             self.database._raise_schema_hint_if_needed(exc)
             raise
 
+    def append_knowledge_update_module_diff_records(
+        self,
+        records: list[KnowledgeUpdateModuleDiffRecord],
+    ) -> None:
+        if not records:
+            return
+        insert_sql = (
+            "INSERT INTO workspace_knowledge_update_module_diff_records ("
+            "workspace_id, session_id, requirement_id, module_key, changed, payload_json, created_at"
+            ") VALUES (%s, %s, %s, %s, %s, %s, %s)"
+        )
+        try:
+            with self.database.connection() as connection:
+                cursor = connection.cursor()
+                for record in records:
+                    cursor.execute(
+                        insert_sql,
+                        (
+                            record.workspace_id,
+                            record.session_id,
+                            record.requirement_id,
+                            record.module_key,
+                            1 if record.changed else 0,
+                            json.dumps(asdict(record), ensure_ascii=False, default=_json_default),
+                            record.created_at,
+                        ),
+                    )
+        except Exception as exc:
+            self.database._raise_schema_hint_if_needed(exc)
+            raise
+
     def load_latest_knowledge_update_record(self, workspace_id: str) -> KnowledgeUpdateRecord | None:
         records = self.load_knowledge_update_records_by_sessions(workspace_id, [])
         if "__latest__" not in records:
             return None
-        return KnowledgeUpdateRecord.from_payload(records["__latest__"])
+        latest_record = KnowledgeUpdateRecord.from_payload(records["__latest__"])
+        if latest_record.session_id:
+            records_by_session = self.load_knowledge_update_module_diff_records_by_sessions(
+                workspace_id,
+                [latest_record.session_id],
+            )
+            latest_record.module_diff_records = records_by_session.get(latest_record.session_id, [])
+        return latest_record
 
     def load_knowledge_update_records_by_sessions(
         self,
@@ -199,15 +245,127 @@ class WorkspaceStore:
             raise
 
         records: dict[str, dict[str, Any]] = {}
+        session_ids_for_summary: list[str] = []
         for row in rows:
             get = (lambda key: row[key]) if isinstance(row, dict) or hasattr(row, "keys") else None
             session_id = str(get("session_id") if get else row[0])
             payload_text = get("payload_json") if get else row[1]
             payload = json.loads(payload_text)
             records[session_id] = payload
+            if session_id and session_id not in session_ids_for_summary:
+                session_ids_for_summary.append(session_id)
+        self._enrich_knowledge_update_payloads_with_module_diffs(workspace_id, records, session_ids_for_summary)
         if latest_only and rows:
             records["__latest__"] = next(iter(records.values()))
         return records
+
+    def load_knowledge_update_module_diff_records(
+        self,
+        workspace_id: str,
+        session_id: str,
+        requirement_id: str,
+    ) -> list[dict[str, Any]]:
+        sql = (
+            "SELECT payload_json "
+            f"FROM workspace_knowledge_update_module_diff_records WHERE workspace_id = {self.database.placeholder} "
+            f"AND session_id = {self.database.placeholder} AND requirement_id = {self.database.placeholder} "
+            "ORDER BY module_key"
+        )
+        try:
+            with self.database.connection() as connection:
+                cursor = connection.cursor()
+                cursor.execute(sql, (workspace_id, session_id, requirement_id))
+                rows = cursor.fetchall() or []
+        except Exception as exc:
+            message = str(exc).lower()
+            if "workspace_knowledge_update_module_diff_records" in message and ("doesn't exist" in message or "no such table" in message):
+                return []
+            self.database._raise_schema_hint_if_needed(exc)
+            raise
+        records: list[dict[str, Any]] = []
+        for row in rows:
+            payload_text = row["payload_json"] if isinstance(row, dict) or hasattr(row, "keys") else row[0]
+            records.append(json.loads(payload_text))
+        return records
+
+    def load_knowledge_update_module_diff_records_by_sessions(
+        self,
+        workspace_id: str,
+        session_ids: list[str],
+    ) -> dict[str, list[dict[str, Any]]]:
+        if not session_ids:
+            return {}
+        placeholders = ", ".join([self.database.placeholder] * len(session_ids))
+        sql = (
+            "SELECT session_id, payload_json "
+            "FROM workspace_knowledge_update_module_diff_records "
+            f"WHERE workspace_id = {self.database.placeholder} AND session_id IN ({placeholders}) "
+            "ORDER BY requirement_id, module_key, created_at"
+        )
+        params = (workspace_id, *session_ids)
+        try:
+            with self.database.connection() as connection:
+                cursor = connection.cursor()
+                cursor.execute(sql, params)
+                rows = cursor.fetchall() or []
+        except Exception as exc:
+            message = str(exc).lower()
+            if "workspace_knowledge_update_module_diff_records" in message and ("doesn't exist" in message or "no such table" in message):
+                return {}
+            self.database._raise_schema_hint_if_needed(exc)
+            raise
+        grouped: dict[str, list[dict[str, Any]]] = {session_id: [] for session_id in session_ids}
+        for row in rows:
+            get = (lambda key: row[key]) if isinstance(row, dict) or hasattr(row, "keys") else None
+            session_id = str(get("session_id") if get else row[0])
+            payload_text = get("payload_json") if get else row[1]
+            grouped.setdefault(session_id, []).append(json.loads(payload_text))
+        return grouped
+
+    def _enrich_knowledge_update_payloads_with_module_diffs(
+        self,
+        workspace_id: str,
+        payloads: dict[str, dict[str, Any]],
+        session_ids: list[str],
+    ) -> None:
+        if not payloads or not session_ids:
+            return
+        records_by_session = self.load_knowledge_update_module_diff_records_by_sessions(workspace_id, session_ids)
+        for session_id in session_ids:
+            payload = payloads.get(session_id)
+            if not payload:
+                continue
+            summary = self._summarize_module_diff_records(records_by_session.get(session_id, []))
+            payload.update(summary)
+
+    def _summarize_module_diff_records(self, records: list[dict[str, Any]]) -> dict[str, Any]:
+        requirement_map: dict[str, dict[str, Any]] = {}
+        for record in records:
+            requirement_id = str(record.get("requirement_id") or "")
+            if not requirement_id:
+                continue
+            summary = requirement_map.setdefault(
+                requirement_id,
+                {
+                    "requirement_id": requirement_id,
+                    "requirement_title": str(record.get("requirement_title") or ""),
+                    "module_count": 0,
+                    "changed_module_count": 0,
+                    "module_keys": [],
+                },
+            )
+            summary["module_count"] += 1
+            if bool(record.get("changed")):
+                summary["changed_module_count"] += 1
+            module_key = str(record.get("module_key") or "")
+            if module_key and module_key not in summary["module_keys"]:
+                summary["module_keys"].append(module_key)
+        return {
+            "has_module_diff_records": bool(records),
+            "module_change_count": len(records),
+            "requirement_change_count": len(requirement_map),
+            "requirement_summaries": list(requirement_map.values()),
+        }
 
     def load_confirmation_records(
         self,

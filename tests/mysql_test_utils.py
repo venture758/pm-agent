@@ -16,6 +16,7 @@ TEST_TABLES = [
     "workspace_story_records",
     "workspace_insight_snapshots",
     "workspace_knowledge_update_records",
+    "workspace_knowledge_update_module_diff_records",
     "workspace_confirmation_records",
     "workspace_recommendations",
     "workspace_managed_members",

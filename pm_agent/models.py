@@ -231,6 +231,11 @@ class KnowledgeUpdateRecord:
     knowledge_updates: dict[str, Any] = field(default_factory=dict)
     optimization_suggestions: list[dict[str, Any]] = field(default_factory=list)
     error_message: str = ""
+    has_module_diff_records: bool = False
+    module_change_count: int = 0
+    requirement_change_count: int = 0
+    requirement_summaries: list[dict[str, Any]] = field(default_factory=list)
+    module_diff_records: list[dict[str, Any]] = field(default_factory=list)
     triggered_at: str = field(default_factory=lambda: datetime.utcnow().isoformat())
 
     @classmethod
@@ -248,7 +253,50 @@ class KnowledgeUpdateRecord:
                 if isinstance(item, Mapping)
             ],
             error_message=str(data.get("error_message") or ""),
+            has_module_diff_records=bool(data.get("has_module_diff_records") or False),
+            module_change_count=int(data.get("module_change_count") or 0),
+            requirement_change_count=int(data.get("requirement_change_count") or 0),
+            requirement_summaries=[
+                dict(item)
+                for item in list(data.get("requirement_summaries") or [])
+                if isinstance(item, Mapping)
+            ],
+            module_diff_records=[
+                dict(item)
+                for item in list(data.get("module_diff_records") or [])
+                if isinstance(item, Mapping)
+            ],
             triggered_at=str(data.get("triggered_at") or datetime.utcnow().isoformat()),
+        )
+
+
+@dataclass
+class KnowledgeUpdateModuleDiffRecord:
+    workspace_id: str
+    session_id: str
+    requirement_id: str
+    requirement_title: str = ""
+    module_key: str = ""
+    changed: bool = False
+    before_snapshot: dict[str, Any] = field(default_factory=dict)
+    after_snapshot: dict[str, Any] = field(default_factory=dict)
+    diff_summary: dict[str, Any] = field(default_factory=dict)
+    created_at: str = field(default_factory=lambda: datetime.utcnow().isoformat())
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any] | None) -> "KnowledgeUpdateModuleDiffRecord":
+        data = dict(payload or {})
+        return cls(
+            workspace_id=str(data.get("workspace_id") or ""),
+            session_id=str(data.get("session_id") or ""),
+            requirement_id=str(data.get("requirement_id") or ""),
+            requirement_title=str(data.get("requirement_title") or ""),
+            module_key=str(data.get("module_key") or ""),
+            changed=bool(data.get("changed") or False),
+            before_snapshot=dict(data.get("before_snapshot") or {}),
+            after_snapshot=dict(data.get("after_snapshot") or {}),
+            diff_summary=dict(data.get("diff_summary") or {}),
+            created_at=str(data.get("created_at") or datetime.utcnow().isoformat()),
         )
 
 

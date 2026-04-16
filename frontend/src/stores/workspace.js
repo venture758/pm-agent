@@ -75,6 +75,7 @@ export const useWorkspaceStore = defineStore("workspace", {
       total: 0,
       total_pages: 0,
     },
+    knowledgeUpdateModuleDiffs: {},
     chatSessions: [],
     activeSessionId: "",
     storyPagination: {
@@ -434,6 +435,49 @@ export const useWorkspaceStore = defineStore("workspace", {
         throw error;
       } finally {
         this.loading = false;
+      }
+    },
+    async loadKnowledgeUpdateModuleDiffs(sessionId, requirementId, { force = false } = {}) {
+      const cacheKey = `${sessionId}::${requirementId}`;
+      const current = this.knowledgeUpdateModuleDiffs[cacheKey];
+      if (!force && current?.loaded) {
+        return current.items || [];
+      }
+      this.knowledgeUpdateModuleDiffs = {
+        ...this.knowledgeUpdateModuleDiffs,
+        [cacheKey]: {
+          items: current?.items || [],
+          loading: true,
+          loaded: false,
+        },
+      };
+      try {
+        const payload = await apiClient.getKnowledgeUpdateModuleDiffs(
+          this.workspaceId,
+          sessionId,
+          requirementId,
+        );
+        this.knowledgeUpdateModuleDiffs = {
+          ...this.knowledgeUpdateModuleDiffs,
+          [cacheKey]: {
+            items: payload.items || [],
+            loading: false,
+            loaded: true,
+          },
+        };
+        this.error = "";
+        return payload.items || [];
+      } catch (error) {
+        this.knowledgeUpdateModuleDiffs = {
+          ...this.knowledgeUpdateModuleDiffs,
+          [cacheKey]: {
+            items: current?.items || [],
+            loading: false,
+            loaded: false,
+          },
+        };
+        this.error = error.message;
+        throw error;
       }
     },
     async sendChatMessage(message) {

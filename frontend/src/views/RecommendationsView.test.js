@@ -42,6 +42,7 @@ describe("RecommendationsView", () => {
     mockRouterReplace.mockReset();
     const store = useWorkspaceStore();
     store.loadConfirmationHistory = vi.fn(async () => {});
+    store.loadKnowledgeUpdateModuleDiffs = vi.fn(async () => []);
   });
 
   it("deletes a recommendation immediately", async () => {
@@ -129,6 +130,20 @@ describe("RecommendationsView", () => {
         suggested_modules: [{ big_module: "税务", function_module: "发票网关" }],
       },
       optimization_suggestions: [{ type: "single_point", suggestion: "培养 B 角" }],
+      has_module_diff_records: true,
+      module_change_count: 1,
+      requirement_change_count: 1,
+      module_diff_records: [
+        {
+          requirement_id: "R-1",
+          requirement_title: "发票修复",
+          module_key: "税务::发票接口",
+          changed: true,
+          before_snapshot: { primary_owner: "李祥" },
+          after_snapshot: { primary_owner: "李祥", recent_assignees: ["李祥"] },
+          diff_summary: { changed_field_count: 1 },
+        },
+      ],
       error_message: "",
     };
 
@@ -139,6 +154,8 @@ describe("RecommendationsView", () => {
     expect(wrapper.text()).toContain("熟悉度建议 1");
     expect(wrapper.text()).toContain("模块建议 1");
     expect(wrapper.text()).toContain("优化建议 1");
+    expect(wrapper.text()).toContain("模块变更 1");
+    expect(wrapper.get('[data-test="latest-knowledge-module-diffs"]').text()).toContain("税务::发票接口");
   });
 
   it("shows knowledge update status and error in history tab", async () => {
@@ -160,6 +177,7 @@ describe("RecommendationsView", () => {
         ],
         knowledge_update: {
           status: "failed",
+          has_module_diff_records: false,
           reply: "",
           knowledge_updates: {},
           optimization_suggestions: [],
@@ -175,5 +193,64 @@ describe("RecommendationsView", () => {
     expect(wrapper.get('[data-test="history-knowledge-status"]').text()).toContain("失败");
     await wrapper.find(".h-summary-row").trigger("click");
     expect(wrapper.text()).toContain("失败原因：LLM 返回非 JSON");
+  });
+
+  it("loads and shows requirement-scoped module diff records in history", async () => {
+    mockRoute.query = { tab: "history" };
+    const store = useWorkspaceStore();
+    store.confirmationHistory.items = [
+      {
+        session_id: "session-3",
+        confirmed_count: 1,
+        created_at: "2026-04-14T14:20:00",
+        confirmed_assignments: [
+          {
+            requirement_id: "R-9",
+            title: "税务修复",
+            development_owner: "李祥",
+            testing_owner: "余萍",
+            backup_owner: "王海林",
+          },
+        ],
+        knowledge_update: {
+          status: "success",
+          has_module_diff_records: true,
+          module_change_count: 1,
+          requirement_change_count: 1,
+          knowledge_updates: {},
+          optimization_suggestions: [],
+          reply: "已更新模块知识",
+          error_message: "",
+        },
+      },
+    ];
+    store.confirmationHistory.total = 1;
+    store.loadConfirmationHistory = vi.fn(async () => {});
+    store.loadKnowledgeUpdateModuleDiffs = vi.fn(async () => {
+      store.knowledgeUpdateModuleDiffs["session-3::R-9"] = {
+        loaded: true,
+        loading: false,
+        items: [
+          {
+            requirement_id: "R-9",
+            requirement_title: "税务修复",
+            module_key: "税务::发票接口",
+            changed: true,
+            before_snapshot: { primary_owner: "李祥" },
+            after_snapshot: { primary_owner: "李祥", recent_assignees: ["李祥"] },
+            diff_summary: { changed_field_count: 1 },
+          },
+        ],
+      };
+      return store.knowledgeUpdateModuleDiffs["session-3::R-9"].items;
+    });
+
+    const wrapper = mount(RecommendationsView);
+    await wrapper.find(".h-summary-row").trigger("click");
+
+    expect(store.loadKnowledgeUpdateModuleDiffs).toHaveBeenCalledWith("session-3", "R-9");
+    expect(wrapper.get('[data-test="history-module-diffs"]').text()).toContain("税务::发票接口");
+    expect(wrapper.text()).toContain("更新前");
+    expect(wrapper.text()).toContain("更新后");
   });
 });

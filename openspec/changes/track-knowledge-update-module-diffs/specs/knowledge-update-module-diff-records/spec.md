@@ -1,12 +1,12 @@
 ## ADDED Requirements
 
 ### Requirement: System shall persist module snapshots before and after knowledge updates
-The system SHALL persist independent module-level knowledge update records for every business module that is processed during a knowledge update run. Each record set MUST include the module snapshot before automatic update, the module snapshot after automatic update, and the session/workspace identifiers that tie the change to a specific confirmation-triggered knowledge update run.
+The system SHALL persist independent module-level knowledge update records for every business module that is processed during a knowledge update run. Each record set MUST include the module snapshot before automatic update, the module snapshot after automatic update, and the `workspace_id`, `session_id`, and `requirement_id` identifiers that tie the change to a specific confirmation-triggered knowledge update run and requirement.
 
 #### Scenario: Persist before and after snapshots for changed modules
 - **WHEN** a confirmation-triggered knowledge update run successfully applies automatic changes to one or more business modules
 - **THEN** the system SHALL persist module-level records for each affected `module_key`
-- **THEN** each record SHALL be queryable by `workspace_id` and `session_id`
+- **THEN** each record SHALL be queryable by `workspace_id`, `session_id`, and `requirement_id`
 - **THEN** each record SHALL include both `before_snapshot` and `after_snapshot`
 
 #### Scenario: Persist module records even when no field value changes
@@ -14,11 +14,16 @@ The system SHALL persist independent module-level knowledge update records for e
 - **THEN** the system SHALL still persist a module-level record for that `module_key`
 - **THEN** the record SHALL explicitly identify that the module was processed with no effective field change
 
+#### Scenario: One requirement can map to multiple module change records
+- **WHEN** one `requirement_id` causes the knowledge update Agent to process multiple business modules
+- **THEN** the system SHALL persist multiple module-level records under the same `workspace_id`, `session_id`, and `requirement_id`
+- **THEN** each record SHALL remain distinguishable by `module_key`
+
 ### Requirement: System shall expose structured diff summaries for module-level knowledge updates
 The system SHALL calculate and persist a structured diff summary for every module-level knowledge update record so that users can observe which business module fields were added, removed, or modified by the Agent.
 
 #### Scenario: Return field-level diff summary for a processed module
-- **WHEN** a client queries the module-level records for a knowledge update session
+- **WHEN** a client queries the module-level records for a knowledge update run using `workspace_id`, `session_id`, and `requirement_id`
 - **THEN** the system SHALL return a diff summary for each processed module
 - **THEN** the diff summary SHALL distinguish added, removed, and modified fields
 - **THEN** the diff summary SHALL be derived from the persisted `before_snapshot` and `after_snapshot`
@@ -35,6 +40,11 @@ The system SHALL expose module-level knowledge update change records through the
 - **WHEN** a client requests confirmation history for a workspace
 - **THEN** each history item associated with a knowledge update run SHALL expose the corresponding module-level change records or their structured summary
 - **THEN** the client SHALL be able to inspect each module's before snapshot, after snapshot, and diff summary in the confirmation workflow context
+
+#### Scenario: Filter module change details by requirement within one session
+- **WHEN** a client requests module change details for a specific `workspace_id`, `session_id`, and `requirement_id`
+- **THEN** the system SHALL return only the module change records associated with that requirement
+- **THEN** the returned records SHALL cover all modules changed for that requirement in the knowledge update run
 
 ### Requirement: System shall preserve truthful semantics for skipped and failed knowledge update runs
 The system MUST preserve truthful audit semantics when a knowledge update run is skipped or fails. The system SHALL keep the session-level status and error context, and SHALL NOT fabricate module-level after snapshots for runs that never applied module updates.

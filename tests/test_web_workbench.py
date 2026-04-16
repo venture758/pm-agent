@@ -423,6 +423,15 @@ class WebWorkbenchTest(unittest.TestCase):
             self.assertEqual([], payload["handoff"]["stories"])
             self.assertEqual([], payload["handoff"]["tasks"])
             self.assertIn("已记录确认结果（未进入平台同步）", payload["messages"][0])
+            session_id = payload["latest_knowledge_update"]["session_id"]
+            status, detail_payload = self._request(
+                app,
+                "GET",
+                f"/api/workspaces/default/confirmations/{session_id}/requirements/1/knowledge-update-modules",
+            )
+            self.assertTrue(status.startswith("200"))
+            self.assertEqual(1, detail_payload["total"])
+            self.assertEqual("税务::发票接口", detail_payload["items"][0]["module_key"])
 
     def test_story_only_upload_service_supports_partial_fail_and_upsert(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -610,6 +619,10 @@ class WebWorkbenchTest(unittest.TestCase):
             self.assertEqual("success", payload["latest_knowledge_update"]["status"])
             self.assertEqual(session_id, payload["latest_knowledge_update"]["session_id"])
             self.assertEqual("建议培养发票接口 B 角", payload["latest_knowledge_update"]["reply"])
+            self.assertTrue(payload["latest_knowledge_update"]["has_module_diff_records"])
+            self.assertEqual(1, payload["latest_knowledge_update"]["module_change_count"])
+            self.assertEqual(1, payload["latest_knowledge_update"]["requirement_change_count"])
+            self.assertEqual(1, len(payload["latest_knowledge_update"]["module_diff_records"]))
 
             with self.store.connection() as connection:
                 cursor = connection.cursor()
@@ -618,6 +631,12 @@ class WebWorkbenchTest(unittest.TestCase):
                     ("default",),
                 )
                 rows = cursor.fetchall()
+                cursor.execute(
+                    "SELECT requirement_id, module_key, changed, payload_json "
+                    "FROM workspace_knowledge_update_module_diff_records WHERE workspace_id = %s",
+                    ("default",),
+                )
+                module_rows = cursor.fetchall()
 
             self.assertEqual(1, len(rows))
             row_session_id, status, payload_json = rows[0]
@@ -626,9 +645,22 @@ class WebWorkbenchTest(unittest.TestCase):
             record = json.loads(payload_json)
             self.assertEqual("success", record["status"])
             self.assertEqual("建议培养发票接口 B 角", record["reply"])
+            self.assertEqual(1, len(module_rows))
+            requirement_id, module_key, changed, module_payload_json = module_rows[0]
+            self.assertEqual("1", requirement_id)
+            self.assertEqual("税务::发票接口", module_key)
+            self.assertEqual(1, changed)
+            module_record = json.loads(module_payload_json)
+            self.assertEqual("1", module_record["requirement_id"])
+            self.assertIn("before_snapshot", module_record)
+            self.assertIn("after_snapshot", module_record)
+            self.assertGreaterEqual(module_record["diff_summary"]["changed_field_count"], 1)
 
             history = service.list_confirmation_records("default", page=1, page_size=20)
             self.assertEqual("success", history["items"][0]["knowledge_update"]["status"])
+            detail = service.get_knowledge_update_module_diff_records("default", session_id, "1")
+            self.assertEqual(1, detail["total"])
+            self.assertEqual("税务::发票接口", detail["items"][0]["module_key"])
 
     def test_confirm_assignments_skips_knowledge_update_when_llm_unavailable(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -640,6 +672,7 @@ class WebWorkbenchTest(unittest.TestCase):
             self.assertEqual(1, len(payload["confirmed_assignments"]))
             self.assertEqual("skipped", payload["latest_knowledge_update"]["status"])
             self.assertEqual("LLM 未配置", payload["latest_knowledge_update"]["reply"])
+            self.assertTrue(payload["latest_knowledge_update"]["has_module_diff_records"])
             history = service.list_confirmation_records("default", page=1, page_size=20)
             self.assertEqual("skipped", history["items"][0]["knowledge_update"]["status"])
 
@@ -657,6 +690,23 @@ class WebWorkbenchTest(unittest.TestCase):
             workspace = service.workspaces.load_workspace("default")
             self.assertEqual(1, len(workspace.confirmed_assignments))
             self.assertEqual("failed", workspace.latest_knowledge_update.status)
+            self.assertTrue(workspace.latest_knowledge_update.has_module_diff_records)
+
+    def test_module_diff_records_can_mark_unchanged_snapshot(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            service = self._create_service(tmpdir)
+            entry = ModuleKnowledgeEntry(
+                key="税务::发票接口",
+                big_module="税务",
+                function_module="发票接口",
+                primary_owner="李祥",
+                familiar_members=["李祥"],
+            )
+            before_snapshot = service._module_entry_snapshot(entry)
+            changed, diff_summary = service._build_module_snapshot_diff(before_snapshot, before_snapshot)
+            self.assertFalse(changed)
+            self.assertEqual(0, diff_summary["changed_field_count"])
+            self.assertEqual([], diff_summary["modified_fields"])
 
     def test_chat_recommendation_flow(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

@@ -28,6 +28,21 @@ const isMobileReadonly = ref(false);
 
 const recommendations = computed(() => workspaceStore.workspace.recommendations || []);
 const latestKnowledgeUpdate = computed(() => workspaceStore.workspace.latest_knowledge_update || null);
+const latestRequirementDiffGroups = computed(() => {
+  const grouped = {};
+  (latestKnowledgeUpdate.value?.module_diff_records || []).forEach((record) => {
+    const requirementId = record.requirement_id || "UNKNOWN";
+    if (!grouped[requirementId]) {
+      grouped[requirementId] = {
+        requirement_id: requirementId,
+        requirement_title: record.requirement_title || "",
+        records: [],
+      };
+    }
+    grouped[requirementId].records.push(record);
+  });
+  return Object.values(grouped);
+});
 const recommendationMap = computed(() => {
   const map = {};
   recommendations.value.forEach((item) => {
@@ -83,6 +98,22 @@ function suggestedModuleCount(record) {
 
 function optimizationSuggestionCount(record) {
   return Array.isArray(record?.optimization_suggestions) ? record.optimization_suggestions.length : 0;
+}
+
+function moduleChangeCount(record) {
+  return Number(record?.module_change_count || 0);
+}
+
+function requirementChangeCount(record) {
+  return Number(record?.requirement_change_count || 0);
+}
+
+function changedFieldCount(record) {
+  return Number(record?.diff_summary?.changed_field_count || 0);
+}
+
+function formatSnapshot(snapshot) {
+  return JSON.stringify(snapshot || {}, null, 2);
 }
 
 const overview = computed(() => {
@@ -352,6 +383,7 @@ onUnmounted(() => {
       <button
         class="sub-nav-link"
         :class="{ 'sub-nav-link--active': activeTab === 'history' }"
+        data-test="tab-history"
         @click="setActiveTab('history')"
       >
         <svg class="sub-nav-icon" viewBox="0 0 20 20" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
@@ -400,6 +432,46 @@ onUnmounted(() => {
           <span class="knowledge-metric">熟悉度建议 {{ familiaritySuggestionCount(latestKnowledgeUpdate) }}</span>
           <span class="knowledge-metric">模块建议 {{ suggestedModuleCount(latestKnowledgeUpdate) }}</span>
           <span class="knowledge-metric">优化建议 {{ optimizationSuggestionCount(latestKnowledgeUpdate) }}</span>
+          <span class="knowledge-metric">模块变更 {{ moduleChangeCount(latestKnowledgeUpdate) }}</span>
+          <span class="knowledge-metric">涉及需求 {{ requirementChangeCount(latestKnowledgeUpdate) }}</span>
+        </div>
+        <div
+          v-if="latestRequirementDiffGroups.length"
+          class="knowledge-diff-groups"
+          data-test="latest-knowledge-module-diffs"
+        >
+          <article
+            v-for="group in latestRequirementDiffGroups"
+            :key="group.requirement_id"
+            class="knowledge-diff-group"
+          >
+            <div class="knowledge-diff-group-head">
+              <strong>{{ group.requirement_title || group.requirement_id }}</strong>
+              <span>{{ group.requirement_id }} · {{ group.records.length }} 个模块</span>
+            </div>
+            <div class="knowledge-diff-records">
+              <details
+                v-for="record in group.records"
+                :key="`${group.requirement_id}-${record.module_key}`"
+                class="knowledge-diff-record"
+              >
+                <summary>
+                  <span>{{ record.module_key }}</span>
+                  <span>{{ record.changed ? `变更字段 ${changedFieldCount(record)}` : "无字段变化" }}</span>
+                </summary>
+                <div class="knowledge-diff-snapshots">
+                  <div class="knowledge-diff-snapshot">
+                    <h4>更新前</h4>
+                    <pre>{{ formatSnapshot(record.before_snapshot) }}</pre>
+                  </div>
+                  <div class="knowledge-diff-snapshot">
+                    <h4>更新后</h4>
+                    <pre>{{ formatSnapshot(record.after_snapshot) }}</pre>
+                  </div>
+                </div>
+              </details>
+            </div>
+          </article>
         </div>
         <p
           v-if="latestKnowledgeUpdate.status === 'failed' && latestKnowledgeUpdate.error_message"
@@ -927,6 +999,76 @@ onUnmounted(() => {
   font-weight: 600;
   color: #4f6476;
   background: rgba(33, 58, 79, 0.06);
+}
+
+.knowledge-diff-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.knowledge-diff-group {
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: rgba(244, 247, 250, 0.9);
+  border: 1px solid rgba(23, 32, 42, 0.06);
+}
+
+.knowledge-diff-group-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+  font-size: 12px;
+  color: #556879;
+}
+
+.knowledge-diff-records {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.knowledge-diff-record {
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.94);
+  border: 1px solid rgba(23, 32, 42, 0.06);
+  padding: 0 10px;
+}
+
+.knowledge-diff-record summary {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 0;
+  cursor: pointer;
+  font-size: 12px;
+  color: #213a4f;
+}
+
+.knowledge-diff-snapshots {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  padding: 0 0 12px 0;
+}
+
+.knowledge-diff-snapshot h4 {
+  margin: 0 0 6px 0;
+  font-size: 11px;
+  color: #6c7e8f;
+}
+
+.knowledge-diff-snapshot pre {
+  margin: 0;
+  padding: 10px;
+  border-radius: 10px;
+  background: #17202a;
+  color: #f4f8fb;
+  font-size: 11px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 /* ====== Command Strip ====== */

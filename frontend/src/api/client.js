@@ -118,6 +118,11 @@ export const apiClient = {
   listConfirmationRecords(workspaceId, page = 1, pageSize = 20) {
     return request(`/api/workspaces/${workspaceId}/confirmations${buildQuery({ page, pageSize })}`);
   },
+  getKnowledgeUpdateModuleDiffs(workspaceId, sessionId, requirementId) {
+    return request(
+      `/api/workspaces/${workspaceId}/confirmations/${encodeURIComponent(sessionId)}/requirements/${encodeURIComponent(requirementId)}/knowledge-update-modules`,
+    );
+  },
   listStories(workspaceId, page = 1, pageSize = 20, keyword = null) {
     return request(`/api/workspaces/${workspaceId}/stories${buildQuery({ page, pageSize, keyword })}`);
   },

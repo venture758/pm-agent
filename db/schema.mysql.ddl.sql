@@ -163,6 +163,21 @@ CREATE TABLE IF NOT EXISTS workspace_knowledge_update_records (
   KEY idx_workspace_knowledge_update_records_session_id (session_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='工作区知识更新记录表';
 
+CREATE TABLE IF NOT EXISTS workspace_knowledge_update_module_diff_records (
+  id BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+  workspace_id VARCHAR(255) NOT NULL COMMENT '关联工作区标识',
+  session_id VARCHAR(64) NOT NULL COMMENT '知识更新所属会话ID',
+  requirement_id VARCHAR(255) NOT NULL COMMENT '需求唯一标识',
+  module_key VARCHAR(255) NOT NULL COMMENT '模块唯一键(大模块::功能模块)',
+  changed TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否产生实际字段变更',
+  payload_json LONGTEXT NOT NULL COMMENT '模块更新前后记录快照(JSON)',
+  created_at VARCHAR(64) NOT NULL COMMENT '创建时间(ISO8601)',
+  PRIMARY KEY (id),
+  KEY idx_workspace_knowledge_update_module_diff_workspace (workspace_id),
+  KEY idx_workspace_knowledge_update_module_diff_session_req (session_id, requirement_id),
+  KEY idx_workspace_knowledge_update_module_diff_module_key (module_key)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='工作区知识更新模块前后记录表';
+
 CREATE TABLE IF NOT EXISTS workspace_insight_snapshots (
   id BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID',
   workspace_id VARCHAR(255) NOT NULL COMMENT '关联工作区标识',

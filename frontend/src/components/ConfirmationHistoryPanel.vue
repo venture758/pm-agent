@@ -13,11 +13,39 @@ const pagination = computed(() => ({
   totalPages: workspaceStore.confirmationHistory.total_pages || 0,
 }));
 
-function toggleExpand(sessionId) {
+function moduleDiffCacheKey(sessionId, requirementId) {
+  return `${sessionId}::${requirementId}`;
+}
+
+function requirementModuleDiffState(sessionId, requirementId) {
+  return workspaceStore.knowledgeUpdateModuleDiffs[moduleDiffCacheKey(sessionId, requirementId)] || {
+    items: [],
+    loading: false,
+    loaded: false,
+  };
+}
+
+async function prefetchRequirementDiffs(item) {
+  if (!item?.knowledge_update?.has_module_diff_records) {
+    return;
+  }
+  const assignments = Array.isArray(item.confirmed_assignments) ? item.confirmed_assignments : [];
+  await Promise.all(
+    assignments
+      .filter((assignment) => assignment?.requirement_id)
+      .map((assignment) =>
+        workspaceStore.loadKnowledgeUpdateModuleDiffs(item.session_id, assignment.requirement_id).catch(() => {}),
+      ),
+  );
+}
+
+async function toggleExpand(item) {
+  const sessionId = item.session_id;
   if (expandedSessions.value.has(sessionId)) {
     expandedSessions.value.delete(sessionId);
   } else {
     expandedSessions.value.add(sessionId);
+    await prefetchRequirementDiffs(item);
   }
 }
 
@@ -67,6 +95,22 @@ function suggestedModuleCount(update) {
 
 function optimizationSuggestionCount(update) {
   return Array.isArray(update?.optimization_suggestions) ? update.optimization_suggestions.length : 0;
+}
+
+function moduleChangeCount(update) {
+  return Number(update?.module_change_count || 0);
+}
+
+function requirementChangeCount(update) {
+  return Number(update?.requirement_change_count || 0);
+}
+
+function changedFieldCount(record) {
+  return Number(record?.diff_summary?.changed_field_count || 0);
+}
+
+function formatSnapshot(snapshot) {
+  return JSON.stringify(snapshot || {}, null, 2);
 }
 
 function goToPage(page) {
@@ -122,7 +166,7 @@ onMounted(() => {
         </thead>
         <tbody>
           <template v-for="item in historyItems" :key="item.session_id">
-            <tr class="h-summary-row" @click="toggleExpand(item.session_id)">
+            <tr class="h-summary-row" @click="toggleExpand(item)">
               <td class="h-col-expand">
                 <svg class="h-chevron" :class="{ expanded: isExpanded(item.session_id) }" viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                   <path d="M7 5l5 5-5 5" />
@@ -167,6 +211,8 @@ onMounted(() => {
                       <span class="h-knowledge-metric">熟悉度建议 {{ familiaritySuggestionCount(item.knowledge_update) }}</span>
                       <span class="h-knowledge-metric">模块建议 {{ suggestedModuleCount(item.knowledge_update) }}</span>
                       <span class="h-knowledge-metric">优化建议 {{ optimizationSuggestionCount(item.knowledge_update) }}</span>
+                      <span class="h-knowledge-metric">模块变更 {{ moduleChangeCount(item.knowledge_update) }}</span>
+                      <span class="h-knowledge-metric">涉及需求 {{ requirementChangeCount(item.knowledge_update) }}</span>
                     </div>
                     <p
                       v-if="item.knowledge_update?.status === 'failed' && item.knowledge_update?.error_message"
@@ -195,6 +241,54 @@ onMounted(() => {
                       </tr>
                     </tbody>
                   </table>
+                  <div
+                    v-if="item.knowledge_update?.has_module_diff_records"
+                    class="h-module-diff-groups"
+                    data-test="history-module-diffs"
+                  >
+                    <article
+                      v-for="assignment in item.confirmed_assignments"
+                      :key="`${item.session_id}-${assignment.requirement_id}`"
+                      class="h-module-diff-group"
+                    >
+                      <div class="h-module-diff-group-head">
+                        <strong>{{ assignment.title || assignment.requirement_id }}</strong>
+                        <span>{{ assignment.requirement_id }}</span>
+                      </div>
+                      <p
+                        v-if="requirementModuleDiffState(item.session_id, assignment.requirement_id).loading"
+                        class="h-module-diff-hint"
+                      >
+                        正在加载模块前后记录…
+                      </p>
+                      <p
+                        v-else-if="requirementModuleDiffState(item.session_id, assignment.requirement_id).loaded && !requirementModuleDiffState(item.session_id, assignment.requirement_id).items.length"
+                        class="h-module-diff-hint"
+                      >
+                        当前需求没有模块变更记录。
+                      </p>
+                      <details
+                        v-for="record in requirementModuleDiffState(item.session_id, assignment.requirement_id).items"
+                        :key="`${assignment.requirement_id}-${record.module_key}`"
+                        class="h-module-diff-record"
+                      >
+                        <summary>
+                          <span>{{ record.module_key }}</span>
+                          <span>{{ record.changed ? `变更字段 ${changedFieldCount(record)}` : "无字段变化" }}</span>
+                        </summary>
+                        <div class="h-module-diff-snapshots">
+                          <div class="h-module-diff-snapshot">
+                            <h4>更新前</h4>
+                            <pre>{{ formatSnapshot(record.before_snapshot) }}</pre>
+                          </div>
+                          <div class="h-module-diff-snapshot">
+                            <h4>更新后</h4>
+                            <pre>{{ formatSnapshot(record.after_snapshot) }}</pre>
+                          </div>
+                        </div>
+                      </details>
+                    </article>
+                  </div>
                 </div>
               </td>
             </tr>
@@ -530,6 +624,80 @@ onMounted(() => {
 
 .h-detail-owner {
   color: #4b5b6b;
+}
+
+.h-module-diff-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.h-module-diff-group {
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: rgba(241, 246, 250, 0.78);
+  border: 1px solid rgba(23, 32, 42, 0.06);
+}
+
+.h-module-diff-group-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+  font-size: 12px;
+  color: #536678;
+}
+
+.h-module-diff-hint {
+  margin: 0;
+  font-size: 12px;
+  color: #7d8d9d;
+}
+
+.h-module-diff-record {
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.84);
+  border: 1px solid rgba(23, 32, 42, 0.06);
+  padding: 0 10px;
+}
+
+.h-module-diff-record + .h-module-diff-record {
+  margin-top: 8px;
+}
+
+.h-module-diff-record summary {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 0;
+  cursor: pointer;
+  font-size: 12px;
+  color: #243748;
+}
+
+.h-module-diff-snapshots {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  padding: 0 0 12px 0;
+}
+
+.h-module-diff-snapshot h4 {
+  margin: 0 0 6px 0;
+  font-size: 11px;
+  color: #6d7d8d;
+}
+
+.h-module-diff-snapshot pre {
+  margin: 0;
+  padding: 10px;
+  border-radius: 10px;
+  background: #17202a;
+  color: #f4f8fb;
+  font-size: 11px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 /* Pagination */
