@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import io
 import json
-import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
 
+from mysql_test_utils import ensure_mysql_schema, get_test_database_url, reset_mysql_test_data
 from openpyxl import Workbook
 
 from pm_agent.api import create_api_app
@@ -32,15 +32,19 @@ class FakeKnowledgeLlm:
         return json.loads(text)
 
 
+@unittest.skipUnless(get_test_database_url(), "PM_AGENT_TEST_DATABASE_URL 未配置")
 class WebWorkbenchTest(unittest.TestCase):
-    def _sqlite_url(self, root: str | Path) -> str:
-        return f"sqlite:///{Path(root) / 'pm_agent.db'}"
+    def setUp(self) -> None:
+        self.database_url = get_test_database_url()
+        assert self.database_url is not None
+        self.store = ensure_mysql_schema(self.database_url)
+        reset_mysql_test_data(self.store)
 
-    def _create_service(self, root: str | Path) -> WorkspaceService:
-        return WorkspaceService(database_url=self._sqlite_url(root))
+    def _create_service(self, _root: str | Path) -> WorkspaceService:
+        return WorkspaceService(database_url=self.database_url)
 
-    def _create_app(self, root: str | Path):
-        return create_api_app(database_url=self._sqlite_url(root))
+    def _create_app(self, _root: str | Path):
+        return create_api_app(database_url=self.database_url)
 
     def _prepare_confirmable_workspace(self, service: WorkspaceService) -> None:
         service.create_managed_member(
@@ -241,16 +245,13 @@ class WebWorkbenchTest(unittest.TestCase):
             self.assertEqual(1, module_page["module_page"]["total"])
             payload = service.generate_recommendations("default")
             self.assertEqual(1, len(payload["recommendations"]))
-            connection = sqlite3.connect(root / "pm_agent.db")
-            try:
+            with self.store.connection() as connection:
                 cursor = connection.cursor()
                 cursor.execute(
-                    "SELECT COUNT(1) FROM workspace_recommendations WHERE workspace_id = ?",
+                    "SELECT COUNT(1) FROM workspace_recommendations WHERE workspace_id = %s",
                     ("default",),
                 )
                 recommendation_count = cursor.fetchone()[0]
-            finally:
-                connection.close()
             self.assertEqual(1, recommendation_count)
 
             workspace_before_confirm = service.workspaces.load_workspace("default")
@@ -261,20 +262,17 @@ class WebWorkbenchTest(unittest.TestCase):
             self.assertEqual([], confirmed["handoff"]["tasks"])
             self.assertIn("已记录确认结果（未进入平台同步）", confirmed["messages"][0])
             self.assertEqual(0, len(confirmed["recommendations"]))
-            connection = sqlite3.connect(root / "pm_agent.db")
-            try:
+            with self.store.connection() as connection:
                 cursor = connection.cursor()
                 cursor.execute(
                     (
                         "SELECT session_id, confirmed_count, payload_json "
-                        "FROM workspace_confirmation_records WHERE workspace_id = ? "
+                        "FROM workspace_confirmation_records WHERE workspace_id = %s "
                         "ORDER BY id DESC LIMIT 1"
                     ),
                     ("default",),
                 )
                 record_row = cursor.fetchone()
-            finally:
-                connection.close()
             self.assertIsNotNone(record_row)
             self.assertEqual(session_id_before_confirm, record_row[0])
             self.assertEqual(1, record_row[1])
@@ -571,17 +569,14 @@ class WebWorkbenchTest(unittest.TestCase):
             self.assertEqual([], payload["handoff"]["tasks"])
             self.assertIn("已记录确认结果（未进入平台同步）", payload["messages"][0])
 
-            connection = sqlite3.connect(root / "pm_agent.db")
-            try:
+            with self.store.connection() as connection:
                 cursor = connection.cursor()
                 cursor.execute(
                     "SELECT workspace_id, session_id, confirmed_count, payload_json "
-                    "FROM workspace_confirmation_records WHERE workspace_id = ?",
+                    "FROM workspace_confirmation_records WHERE workspace_id = %s",
                     ("default",),
                 )
                 rows = cursor.fetchall()
-            finally:
-                connection.close()
 
             self.assertEqual(1, len(rows))
             workspace_id, row_session_id, confirmed_count, payload_json = rows[0]
@@ -616,16 +611,13 @@ class WebWorkbenchTest(unittest.TestCase):
             self.assertEqual(session_id, payload["latest_knowledge_update"]["session_id"])
             self.assertEqual("建议培养发票接口 B 角", payload["latest_knowledge_update"]["reply"])
 
-            connection = sqlite3.connect(root / "pm_agent.db")
-            try:
+            with self.store.connection() as connection:
                 cursor = connection.cursor()
                 cursor.execute(
-                    "SELECT session_id, status, payload_json FROM workspace_knowledge_update_records WHERE workspace_id = ?",
+                    "SELECT session_id, status, payload_json FROM workspace_knowledge_update_records WHERE workspace_id = %s",
                     ("default",),
                 )
                 rows = cursor.fetchall()
-            finally:
-                connection.close()
 
             self.assertEqual(1, len(rows))
             row_session_id, status, payload_json = rows[0]
@@ -933,15 +925,12 @@ class WebWorkbenchTest(unittest.TestCase):
             self.assertEqual("default", payload["title"])
             self.assertEqual([], payload["messages"])
 
-            connection = sqlite3.connect(root / "pm_agent.db")
-            try:
+            with self.store.connection() as connection:
                 cursor = connection.cursor()
-                cursor.execute("SELECT COUNT(1) FROM workspace_states WHERE workspace_id = ?", ("default",))
+                cursor.execute("SELECT COUNT(1) FROM workspace_states WHERE workspace_id = %s", ("default",))
                 self.assertEqual(0, cursor.fetchone()[0])
-                cursor.execute("SELECT COUNT(1) FROM agent_states WHERE state_key = ?", ("global",))
+                cursor.execute("SELECT COUNT(1) FROM agent_states WHERE state_key = %s", ("global",))
                 self.assertEqual(0, cursor.fetchone()[0])
-            finally:
-                connection.close()
 
     def test_local_workspace_json_does_not_backfill_member_table(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -975,17 +964,14 @@ class WebWorkbenchTest(unittest.TestCase):
             payload = service.get_workspace("default")
             self.assertEqual([], payload["managed_members"])
 
-            connection = sqlite3.connect(root / "pm_agent.db")
-            try:
+            with self.store.connection() as connection:
                 cursor = connection.cursor()
                 cursor.execute(
-                    "SELECT COUNT(1) FROM workspace_managed_members WHERE workspace_id = ?",
+                    "SELECT COUNT(1) FROM workspace_managed_members WHERE workspace_id = %s",
                     ("default",),
                 )
                 count = cursor.fetchone()[0]
                 self.assertEqual(0, count)
-            finally:
-                connection.close()
 
     def test_confirmation_history_pagination(self) -> None:
         """GET /api/workspaces/:id/confirmations should return paginated records."""
@@ -1074,7 +1060,7 @@ class WebWorkbenchTest(unittest.TestCase):
                     cursor.execute(
                         "INSERT INTO workspace_story_records ("
                         "workspace_id, user_story_code, user_story_name, modified_time, imported_at, updated_at"
-                        ") VALUES (?, ?, ?, ?, ?, ?)",
+                        ") VALUES (%s, %s, %s, %s, %s, %s)",
                         ("ws1", f"US-{i:03d}", f"Story {i}", f"2026-01-{(i % 28) + 1:02d}", "2026-01-01", "2026-01-01"),
                     )
             status, payload = self._request(app, "GET", "/api/workspaces/ws1/stories")
@@ -1096,7 +1082,7 @@ class WebWorkbenchTest(unittest.TestCase):
                     cursor.execute(
                         "INSERT INTO workspace_story_records ("
                         "workspace_id, user_story_code, user_story_name, modified_time, imported_at, updated_at"
-                        ") VALUES (?, ?, ?, ?, ?, ?)",
+                        ") VALUES (%s, %s, %s, %s, %s, %s)",
                         ("ws1", f"US-{i:03d}", f"Story {i}", "2026-01-01", "2026-01-01", "2026-01-01"),
                     )
             status, payload = self._request(app, "GET", "/api/workspaces/ws1/stories?keyword=US-005")
@@ -1125,7 +1111,7 @@ class WebWorkbenchTest(unittest.TestCase):
                     cursor.execute(
                         "INSERT INTO workspace_story_records ("
                         "workspace_id, user_story_code, user_story_name, modified_time, imported_at, updated_at"
-                        ") VALUES (?, ?, ?, ?, ?, ?)",
+                        ") VALUES (%s, %s, %s, %s, %s, %s)",
                         ("ws1", f"US-{i:03d}", f"Story {i}", "2026-01-01", "2026-01-01", "2026-01-01"),
                     )
             status, payload = self._request(app, "GET", "/api/workspaces/ws1/stories?page=999&pageSize=20")
@@ -1148,7 +1134,7 @@ class WebWorkbenchTest(unittest.TestCase):
                         "INSERT INTO workspace_task_records ("
                         "workspace_id, task_code, name, owner, status, project_name, "
                         "modified_time, imported_at, updated_at"
-                        ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        ") VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
                         ("ws1", f"TK-{i:03d}", f"Task {i}", owner, status, f"项目{i % 3}",
                          "2026-01-01", "2026-01-01", "2026-01-01"),
                     )
@@ -1176,7 +1162,7 @@ class WebWorkbenchTest(unittest.TestCase):
                         "INSERT INTO workspace_task_records ("
                         "workspace_id, task_code, name, owner, status, project_name, "
                         "modified_time, imported_at, updated_at"
-                        ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        ") VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
                         ("ws1", f"TK-{i:03d}", f"Task {i}", owner, status, "项目A",
                          "2026-01-01", "2026-01-01", "2026-01-01"),
                     )

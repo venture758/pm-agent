@@ -1,15 +1,19 @@
--- pm-agent MySQL schema bootstrap
+-- pm-agent MySQL schema
 -- Usage:
 --   mysql -h127.0.0.1 -uroot -p pm_agent < db/schema.mysql.ddl.sql
 
-CREATE TABLE IF NOT EXISTS workspace_states (
+-- ============================================================
+-- Core: workspaces metadata
+-- ============================================================
+CREATE TABLE IF NOT EXISTS workspaces (
   id BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID',
   workspace_id VARCHAR(255) NOT NULL COMMENT '工作区唯一标识',
-  payload LONGTEXT NOT NULL COMMENT '工作区全量状态JSON快照',
+  title VARCHAR(255) NOT NULL DEFAULT '' COMMENT '工作区标题',
+  created_at VARCHAR(64) NOT NULL COMMENT '创建时间(ISO8601)',
   updated_at VARCHAR(64) NOT NULL COMMENT '更新时间(ISO8601)',
   PRIMARY KEY (id),
-  UNIQUE KEY uk_workspace_states_workspace_id (workspace_id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='工作区状态快照表';
+  UNIQUE KEY uk_workspaces_workspace_id (workspace_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='工作区元数据表';
 
 CREATE TABLE IF NOT EXISTS agent_states (
   id BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID',
@@ -19,6 +23,70 @@ CREATE TABLE IF NOT EXISTS agent_states (
   PRIMARY KEY (id),
   UNIQUE KEY uk_agent_states_state_key (state_key)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Agent状态快照表';
+
+-- ============================================================
+-- Chat domain
+-- ============================================================
+CREATE TABLE IF NOT EXISTS chat_sessions (
+  id BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+  session_id VARCHAR(64) NOT NULL COMMENT '会话唯一标识',
+  workspace_id VARCHAR(255) NOT NULL COMMENT '关联工作区标识',
+  created_at VARCHAR(64) NOT NULL COMMENT '创建时间(ISO8601)',
+  last_active_at VARCHAR(64) NOT NULL COMMENT '最后活跃时间(ISO8601)',
+  status VARCHAR(32) NOT NULL DEFAULT 'active' COMMENT '状态: active|archived|confirmed',
+  last_message_preview VARCHAR(255) NOT NULL DEFAULT '' COMMENT '最后一条消息预览',
+  PRIMARY KEY (id),
+  UNIQUE KEY uk_chat_sessions_session_id (session_id),
+  KEY idx_chat_sessions_workspace_active (workspace_id, status, last_active_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='聊天会话表';
+
+CREATE TABLE IF NOT EXISTS chat_messages (
+  id BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+  workspace_id VARCHAR(255) NOT NULL COMMENT '关联工作区标识',
+  session_id VARCHAR(64) NOT NULL COMMENT '关联会话ID',
+  seq INT NOT NULL COMMENT '消息序号',
+  role VARCHAR(16) NOT NULL COMMENT '消息角色: user|assistant|system',
+  content LONGTEXT NOT NULL COMMENT '消息内容',
+  timestamp VARCHAR(64) NOT NULL COMMENT '消息时间(ISO8601)',
+  parsed_requirements_json LONGTEXT NOT NULL DEFAULT '' COMMENT '解析后的需求JSON(仅assistant消息)',
+  PRIMARY KEY (id),
+  KEY idx_chat_messages_session_seq (session_id, seq)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='聊天消息表';
+
+-- ============================================================
+-- Requirements domain
+-- ============================================================
+CREATE TABLE IF NOT EXISTS requirements (
+  id BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+  workspace_id VARCHAR(255) NOT NULL COMMENT '关联工作区标识',
+  requirement_id VARCHAR(255) NOT NULL COMMENT '需求唯一标识',
+  title VARCHAR(500) NOT NULL DEFAULT '' COMMENT '需求标题',
+  source VARCHAR(64) NOT NULL DEFAULT 'chat' COMMENT '来源',
+  priority VARCHAR(32) NOT NULL DEFAULT '中' COMMENT '优先级',
+  raw_text TEXT NOT NULL COMMENT '原始文本',
+  complexity VARCHAR(32) NOT NULL DEFAULT '中' COMMENT '复杂度',
+  risk VARCHAR(32) NOT NULL DEFAULT '中' COMMENT '风险等级',
+  requirement_type VARCHAR(64) NOT NULL DEFAULT '' COMMENT '需求类型',
+  source_url VARCHAR(500) NOT NULL DEFAULT '' COMMENT '来源URL',
+  source_message TEXT NOT NULL COMMENT '来源消息',
+  payload_json LONGTEXT NOT NULL COMMENT '完整需求JSON快照',
+  created_at VARCHAR(64) NOT NULL COMMENT '创建时间(ISO8601)',
+  PRIMARY KEY (id),
+  UNIQUE KEY uk_requirements_workspace_req (workspace_id, requirement_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='需求明细表';
+
+CREATE TABLE IF NOT EXISTS session_requirements (
+  id BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+  session_id VARCHAR(64) NOT NULL COMMENT '关联会话ID',
+  requirement_id VARCHAR(255) NOT NULL COMMENT '关联需求ID',
+  PRIMARY KEY (id),
+  UNIQUE KEY uk_session_requirements_session_req (session_id, requirement_id),
+  KEY idx_session_requirements_requirement (requirement_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='会话-需求关联表';
+
+-- ============================================================
+-- Related tables (no FK to workspace_states — independent by workspace_id)
+-- ============================================================
 
 CREATE TABLE IF NOT EXISTS workspace_module_entries (
   id BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID',
@@ -40,10 +108,7 @@ CREATE TABLE IF NOT EXISTS workspace_module_entries (
   updated_at VARCHAR(64) NOT NULL COMMENT '更新时间(ISO8601)',
   PRIMARY KEY (id),
   UNIQUE KEY uk_workspace_module_entries_workspace_key (workspace_id, module_key),
-  KEY idx_workspace_module_entries_workspace_big_module (workspace_id, big_module),
-  CONSTRAINT fk_workspace_module_entries_workspace_id
-    FOREIGN KEY (workspace_id) REFERENCES workspace_states(workspace_id)
-    ON DELETE CASCADE
+  KEY idx_workspace_module_entries_workspace_big_module (workspace_id, big_module)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='工作区业务模块明细表';
 
 CREATE TABLE IF NOT EXISTS workspace_managed_members (
@@ -59,10 +124,7 @@ CREATE TABLE IF NOT EXISTS workspace_managed_members (
   updated_at VARCHAR(64) NOT NULL COMMENT '更新时间(ISO8601)',
   PRIMARY KEY (id),
   UNIQUE KEY uk_workspace_managed_members_workspace_name (workspace_id, member_name),
-  KEY idx_workspace_managed_members_workspace_role (workspace_id, role),
-  CONSTRAINT fk_workspace_managed_members_workspace_id
-    FOREIGN KEY (workspace_id) REFERENCES workspace_states(workspace_id)
-    ON DELETE CASCADE
+  KEY idx_workspace_managed_members_workspace_role (workspace_id, role)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='工作区人员管理明细表';
 
 CREATE TABLE IF NOT EXISTS workspace_recommendations (
@@ -74,10 +136,7 @@ CREATE TABLE IF NOT EXISTS workspace_recommendations (
   updated_at VARCHAR(64) NOT NULL COMMENT '更新时间(ISO8601)',
   PRIMARY KEY (id),
   UNIQUE KEY uk_workspace_recommendations_workspace_requirement (workspace_id, requirement_id),
-  KEY idx_workspace_recommendations_workspace_id (workspace_id),
-  CONSTRAINT fk_workspace_recommendations_workspace_id
-    FOREIGN KEY (workspace_id) REFERENCES workspace_states(workspace_id)
-    ON DELETE CASCADE
+  KEY idx_workspace_recommendations_workspace_id (workspace_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='工作区推荐确认明细表';
 
 CREATE TABLE IF NOT EXISTS workspace_confirmation_records (
@@ -89,10 +148,7 @@ CREATE TABLE IF NOT EXISTS workspace_confirmation_records (
   created_at VARCHAR(64) NOT NULL COMMENT '确认时间(ISO8601)',
   PRIMARY KEY (id),
   KEY idx_workspace_confirmation_records_workspace_id (workspace_id),
-  KEY idx_workspace_confirmation_records_session_id (session_id),
-  CONSTRAINT fk_workspace_confirmation_records_workspace_id
-    FOREIGN KEY (workspace_id) REFERENCES workspace_states(workspace_id)
-    ON DELETE CASCADE
+  KEY idx_workspace_confirmation_records_session_id (session_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='工作区确认记录表';
 
 CREATE TABLE IF NOT EXISTS workspace_knowledge_update_records (
@@ -104,10 +160,7 @@ CREATE TABLE IF NOT EXISTS workspace_knowledge_update_records (
   created_at VARCHAR(64) NOT NULL COMMENT '触发时间(ISO8601)',
   PRIMARY KEY (id),
   KEY idx_workspace_knowledge_update_records_workspace_id (workspace_id),
-  KEY idx_workspace_knowledge_update_records_session_id (session_id),
-  CONSTRAINT fk_workspace_knowledge_update_records_workspace_id
-    FOREIGN KEY (workspace_id) REFERENCES workspace_states(workspace_id)
-    ON DELETE CASCADE
+  KEY idx_workspace_knowledge_update_records_session_id (session_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='工作区知识更新记录表';
 
 CREATE TABLE IF NOT EXISTS workspace_insight_snapshots (
@@ -119,10 +172,7 @@ CREATE TABLE IF NOT EXISTS workspace_insight_snapshots (
   growth_suggestions_json JSON NOT NULL COMMENT '成长建议快照(JSON数组)',
   summary_json JSON NOT NULL COMMENT '聚合指标(JSON对象：team_health_score, high_load_count 等)',
   PRIMARY KEY (id),
-  KEY idx_workspace_insight_snapshots_workspace_time (workspace_id, snapshot_at),
-  CONSTRAINT fk_workspace_insight_snapshots_workspace_id
-    FOREIGN KEY (workspace_id) REFERENCES workspace_states(workspace_id)
-    ON DELETE CASCADE
+  KEY idx_workspace_insight_snapshots_workspace_time (workspace_id, snapshot_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='团队洞察快照表';
 
 CREATE TABLE IF NOT EXISTS workspace_story_records (
@@ -177,10 +227,7 @@ CREATE TABLE IF NOT EXISTS workspace_story_records (
   updated_at VARCHAR(64) NOT NULL COMMENT '更新时间(ISO8601)',
   PRIMARY KEY (id),
   UNIQUE KEY uk_workspace_story_records_workspace_story (workspace_id, user_story_code),
-  KEY idx_workspace_story_records_workspace_id (workspace_id),
-  CONSTRAINT fk_workspace_story_records_workspace_id
-    FOREIGN KEY (workspace_id) REFERENCES workspace_states(workspace_id)
-    ON DELETE CASCADE
+  KEY idx_workspace_story_records_workspace_id (workspace_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='工作区故事明细表';
 
 CREATE TABLE IF NOT EXISTS workspace_task_records (
@@ -219,8 +266,5 @@ CREATE TABLE IF NOT EXISTS workspace_task_records (
   UNIQUE KEY uk_workspace_task_records_workspace_task (workspace_id, task_code),
   KEY idx_workspace_task_records_workspace_id (workspace_id),
   KEY idx_workspace_task_records_owner (workspace_id, owner),
-  KEY idx_workspace_task_records_status (workspace_id, status),
-  CONSTRAINT fk_workspace_task_records_workspace_id
-    FOREIGN KEY (workspace_id) REFERENCES workspace_states(workspace_id)
-    ON DELETE CASCADE
+  KEY idx_workspace_task_records_status (workspace_id, status)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='工作区任务明细表';

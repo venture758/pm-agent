@@ -5,6 +5,7 @@ import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
+from urllib.parse import urlparse
 
 
 DEFAULT_CONFIG_PATH = Path("config/pm_agent.toml")
@@ -40,6 +41,7 @@ def load_web_runtime_config(
     static_root = _resolve_value("static_root", file_values, envvars, overrides, default="frontend/dist")
     database_url = _resolve_value("database_url", file_values, envvars, overrides, default="")
     nvidia_api_key = _resolve_value("nvidia_api_key", file_values, envvars, overrides, default="")
+    normalized_database_url = _validate_database_url(str(database_url or ""), resolved_path, resolved_env)
 
     return WebRuntimeConfig(
         env=resolved_env,
@@ -47,7 +49,7 @@ def load_web_runtime_config(
         host=str(host),
         port=int(port_raw),
         static_root=str(static_root),
-        database_url=str(database_url or ""),
+        database_url=normalized_database_url,
         nvidia_api_key=str(nvidia_api_key or ""),
     )
 
@@ -93,3 +95,17 @@ def _resolve_value(
         return file_value
 
     return default
+
+
+def _validate_database_url(database_url: str, config_path: Path, env_name: str) -> str:
+    if not database_url:
+        return ""
+    scheme = urlparse(database_url).scheme.lower()
+    if scheme == "sqlite":
+        raise ValueError(
+            f"项目仅支持 MySQL 数据库；请在 {config_path} 的 [{env_name}] 或 [default] 段配置 mysql:// 连接串，"
+            "或设置 PM_AGENT_DATABASE_URL 为 MySQL 地址"
+        )
+    if scheme not in {"mysql", "mysql+pymysql", "mysql+mysqlconnector", "mysql+mysqldb"}:
+        raise ValueError(f"不支持的数据库地址：{database_url}；项目仅支持 MySQL")
+    return database_url

@@ -25,7 +25,7 @@
 - `pm_agent/workspace_store.py`
   提供工作区状态持久化，工作区状态和上传元数据仅保存在数据库
 - `pm_agent/database.py`
-  提供统一数据库存储（MySQL + SQLite）
+  提供统一数据库存储（仅 MySQL）
 - `db/schema.mysql.ddl.sql`
   MySQL 初始化和维护脚本使用的唯一 DDL 文件
   其中 `workspace_module_entries` 为业务模块明细表（大模块/功能模块/主负责人/B角多人/成员熟悉度三分类）
@@ -150,7 +150,7 @@ PM_AGENT_ENV=prod python3 -m pm_agent_web
 如果要临时覆盖数据库地址，仍然可以：
 
 ```bash
-python3 -m pm_agent_web --host 127.0.0.1 --port 8000 --database-url "sqlite:////absolute/path/to/pm_agent.db"
+python3 -m pm_agent_web --host 127.0.0.1 --port 8000 --database-url "mysql://user:pass@127.0.0.1:3306/pm_agent?charset=utf8mb4"
 ```
 
 前端：

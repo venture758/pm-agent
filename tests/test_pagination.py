@@ -1,15 +1,18 @@
 from __future__ import annotations
 
-import tempfile
 import unittest
 
+from mysql_test_utils import ensure_mysql_schema, get_test_database_url, reset_mysql_test_data
 from pm_agent.workspace_store import WorkspaceStore
 
 
 def _create_test_store() -> WorkspaceStore:
-    tmpdir = tempfile.mkdtemp()
-    url = f"sqlite:///{tmpdir}/test.db"
-    store = WorkspaceStore(database_url=url)
+    database_url = get_test_database_url()
+    if not database_url:
+        raise unittest.SkipTest("PM_AGENT_TEST_DATABASE_URL 未配置")
+    store = WorkspaceStore(database_url=database_url)
+    ensure_mysql_schema(database_url)
+    reset_mysql_test_data(store.database)
     return store
 
 
@@ -19,7 +22,7 @@ def _insert_story(store: WorkspaceStore, workspace_id: str, code: str, name: str
         cursor.execute(
             "INSERT INTO workspace_story_records ("
             "workspace_id, user_story_code, user_story_name, modified_time, imported_at, updated_at"
-            ") VALUES (?, ?, ?, ?, ?, ?)",
+            ") VALUES (%s, %s, %s, %s, %s, %s)",
             (workspace_id, code, name, modified_time, "2026-01-01", "2026-01-01"),
         )
 
@@ -30,15 +33,15 @@ def _insert_task(store: WorkspaceStore, workspace_id: str, code: str, owner: str
         cursor.execute(
             "INSERT INTO workspace_task_records ("
             "workspace_id, task_code, name, owner, status, project_name, modified_time, imported_at, updated_at"
-            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            ") VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
             (workspace_id, code, code, owner, status, project_name, "2026-01-01", "2026-01-01", "2026-01-01"),
         )
 
 
+@unittest.skipUnless(get_test_database_url(), "PM_AGENT_TEST_DATABASE_URL 未配置")
 class StoryPaginationTest(unittest.TestCase):
     def setUp(self) -> None:
         self.store = _create_test_store()
-        # Tables are auto-created by DatabaseStore._ensure_sqlite_schema()
         self.ws = "ws-pagination"
         for i in range(25):
             _insert_story(self.store, self.ws, f"US-{i:03d}", f"Story {i}", modified_time=f"2026-01-{(i % 28) + 1:02d}")
@@ -68,6 +71,7 @@ class StoryPaginationTest(unittest.TestCase):
         self.assertEqual(len(items), 0)
 
 
+@unittest.skipUnless(get_test_database_url(), "PM_AGENT_TEST_DATABASE_URL 未配置")
 class TaskPaginationTest(unittest.TestCase):
     def setUp(self) -> None:
         self.store = _create_test_store()

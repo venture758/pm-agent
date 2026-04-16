@@ -7,7 +7,8 @@ from decimal import Decimal
 from typing import Any
 
 from .database import DatabaseStore
-from .models import AssignmentRecommendation, KnowledgeUpdateRecord, MemberProfile, ModuleKnowledgeEntry, StoryRecord
+from .models import AssignmentRecommendation, KnowledgeUpdateRecord, MemberProfile, ModuleKnowledgeEntry, RequirementItem, StoryRecord
+from .repositories import ChatRepository, RequirementRepository, WorkspaceMetaRepository
 from .story_excel_import import STORY_DB_COLUMNS, row_to_story_record
 from .task_excel_import import TASK_DB_COLUMNS, row_to_task_record
 from .utils import normalize_requirement_id
@@ -23,40 +24,60 @@ def _json_default(obj: Any) -> Any:
 class WorkspaceStore:
     def __init__(self, database_url: str | None = None) -> None:
         self.database = DatabaseStore(database_url=database_url)
+        # Domain repositories
+        self.chat_repo = ChatRepository(self.database)
+        self.req_repo = RequirementRepository(self.database)
+        self.meta_repo = WorkspaceMetaRepository(self.database)
 
     def load_workspace(self, workspace_id: str) -> WorkspaceState:
-        payload = self.database.load_json("workspace_states", "workspace_id", workspace_id)
-        workspace = WorkspaceState.from_dict(payload) if payload else WorkspaceState(workspace_id=workspace_id, title=workspace_id)
+        """Load workspace state by assembling data from domain repositories."""
+        workspace = WorkspaceState(workspace_id=workspace_id, title=workspace_id)
+
+        # Load workspace metadata
+        meta = self.meta_repo.get_workspace(workspace_id)
+        if meta:
+            workspace.title = meta.get("title", workspace_id)
+
+        # Load chat messages and session info from ChatRepository
+        active_session_id = self.chat_repo.get_active_session_id(workspace_id)
+        if active_session_id:
+            messages = self.chat_repo.load_messages(workspace_id, active_session_id)
+            workspace.chat_messages = messages
+            workspace.active_session_id = active_session_id
+            workspace.current_session_id = active_session_id
+
+        # Load requirements from RequirementRepository (reconstruct dataclass objects)
+        workspace.normalized_requirements = self._load_requirements(workspace_id)
+        if active_session_id:
+            workspace.current_session_requirement_ids = self.req_repo.get_session_requirement_ids(active_session_id)
+
+        # Load domain tables (members, modules, recommendations)
         latest_knowledge_update = self.load_latest_knowledge_update_record(workspace_id)
         if latest_knowledge_update is not None:
             workspace.latest_knowledge_update = latest_knowledge_update
-        workspace.current_session_requirement_ids = self._normalize_session_ids(workspace.current_session_requirement_ids)
+
         table_members = self._load_managed_members_from_table(workspace_id)
         if table_members:
             workspace.managed_members = table_members
-        elif workspace.managed_members:
-            workspace.managed_members = self._sorted_members(workspace.managed_members)
-            self._save_managed_members_to_table(workspace_id, workspace.managed_members, workspace.updated_at)
+
         table_entries = self._load_module_entries_from_table(workspace_id)
         if table_entries:
             workspace.module_entries = table_entries
+
         table_recommendations = self._load_recommendations_from_table(workspace_id)
         if table_recommendations:
             workspace.recommendations = table_recommendations
-        elif workspace.recommendations:
-            # Compatibility path: migrate legacy recommendations from workspace payload into dedicated table.
-            self.save_workspace(workspace)
+
         table_stories = self.load_story_records_from_table(workspace_id)
         if table_stories:
             workspace.handoff_stories = [row_to_story_record(item) for item in table_stories]
+
         return workspace
 
     def save_workspace(self, workspace: WorkspaceState) -> None:
+        """Persist domain tables only — no JSON payload serialization."""
         workspace.current_session_requirement_ids = self._normalize_session_ids(workspace.current_session_requirement_ids)
-        payload = asdict(workspace)
-        payload["managed_members"] = []
-        payload["recommendations"] = []
-        self.database.save_json("workspace_states", "workspace_id", workspace.workspace_id, payload)
+        self.meta_repo.update_workspace(workspace.workspace_id, workspace.title)
         self._save_managed_members_to_table(workspace.workspace_id, workspace.managed_members, workspace.updated_at)
         self._save_module_entries_to_table(workspace.workspace_id, workspace.module_entries, workspace.updated_at)
         self._save_recommendations_to_table(workspace.workspace_id, workspace.recommendations, workspace.updated_at)
@@ -83,18 +104,11 @@ class WorkspaceStore:
             "confirmed_count": len(payload_items),
             "confirmed_assignments": payload_items,
         }
-        if self.database.scheme == "sqlite":
-            insert_sql = (
-                "INSERT INTO workspace_confirmation_records ("
-                "workspace_id, session_id, confirmed_count, payload_json, created_at"
-                ") VALUES (?, ?, ?, ?, ?)"
-            )
-        else:
-            insert_sql = (
-                "INSERT INTO workspace_confirmation_records ("
-                "workspace_id, session_id, confirmed_count, payload_json, created_at"
-                ") VALUES (%s, %s, %s, %s, %s)"
-            )
+        insert_sql = (
+            "INSERT INTO workspace_confirmation_records ("
+            "workspace_id, session_id, confirmed_count, payload_json, created_at"
+            ") VALUES (%s, %s, %s, %s, %s)"
+        )
         try:
             with self.database.connection() as connection:
                 cursor = connection.cursor()
@@ -117,18 +131,11 @@ class WorkspaceStore:
         record: KnowledgeUpdateRecord,
     ) -> None:
         payload = asdict(record)
-        if self.database.scheme == "sqlite":
-            insert_sql = (
-                "INSERT INTO workspace_knowledge_update_records ("
-                "workspace_id, session_id, status, payload_json, created_at"
-                ") VALUES (?, ?, ?, ?, ?)"
-            )
-        else:
-            insert_sql = (
-                "INSERT INTO workspace_knowledge_update_records ("
-                "workspace_id, session_id, status, payload_json, created_at"
-                ") VALUES (%s, %s, %s, %s, %s)"
-            )
+        insert_sql = (
+            "INSERT INTO workspace_knowledge_update_records ("
+            "workspace_id, session_id, status, payload_json, created_at"
+            ") VALUES (%s, %s, %s, %s, %s)"
+        )
         try:
             with self.database.connection() as connection:
                 cursor = connection.cursor()
@@ -218,10 +225,7 @@ class WorkspaceStore:
             f"FROM workspace_confirmation_records WHERE workspace_id = {ph} "
             "ORDER BY created_at DESC"
         )
-        if self.database.scheme == "sqlite":
-            data_sql += " LIMIT ? OFFSET ?"
-        else:
-            data_sql += " LIMIT %s OFFSET %s"
+        data_sql += " LIMIT %s OFFSET %s"
 
         offset = max(page - 1, 0) * page_size
 
@@ -346,24 +350,14 @@ class WorkspaceStore:
         updated_at: str,
     ) -> None:
         delete_sql = f"DELETE FROM workspace_module_entries WHERE workspace_id = {self.database.placeholder}"
-        if self.database.scheme == "sqlite":
-            insert_sql = (
-                "INSERT INTO workspace_module_entries ("
-                "workspace_id, module_key, big_module, function_module, primary_owner, "
-                "backup_owners_json, familiar_members_json, aware_members_json, unfamiliar_members_json, "
-                "source_sheet, source_year, imported_at, recent_assignees_json, suggested_familiarity_json, "
-                "assignment_history_json, updated_at"
-                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-            )
-        else:
-            insert_sql = (
-                "INSERT INTO workspace_module_entries ("
-                "workspace_id, module_key, big_module, function_module, primary_owner, "
-                "backup_owners_json, familiar_members_json, aware_members_json, unfamiliar_members_json, "
-                "source_sheet, source_year, imported_at, recent_assignees_json, suggested_familiarity_json, "
-                "assignment_history_json, updated_at"
-                ") VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
-            )
+        insert_sql = (
+            "INSERT INTO workspace_module_entries ("
+            "workspace_id, module_key, big_module, function_module, primary_owner, "
+            "backup_owners_json, familiar_members_json, aware_members_json, unfamiliar_members_json, "
+            "source_sheet, source_year, imported_at, recent_assignees_json, suggested_familiarity_json, "
+            "assignment_history_json, updated_at"
+            ") VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
+        )
         try:
             with self.database.connection() as connection:
                 cursor = connection.cursor()
@@ -401,20 +395,12 @@ class WorkspaceStore:
         updated_at: str,
     ) -> None:
         delete_sql = f"DELETE FROM workspace_managed_members WHERE workspace_id = {self.database.placeholder}"
-        if self.database.scheme == "sqlite":
-            insert_sql = (
-                "INSERT INTO workspace_managed_members ("
-                "workspace_id, member_name, role, skills_json, experience_level, workload, capacity, "
-                "constraints_json, updated_at"
-                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
-            )
-        else:
-            insert_sql = (
-                "INSERT INTO workspace_managed_members ("
-                "workspace_id, member_name, role, skills_json, experience_level, workload, capacity, "
-                "constraints_json, updated_at"
-                ") VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)"
-            )
+        insert_sql = (
+            "INSERT INTO workspace_managed_members ("
+            "workspace_id, member_name, role, skills_json, experience_level, workload, capacity, "
+            "constraints_json, updated_at"
+            ") VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)"
+        )
         try:
             with self.database.connection() as connection:
                 cursor = connection.cursor()
@@ -473,18 +459,11 @@ class WorkspaceStore:
         updated_at: str,
     ) -> None:
         delete_sql = f"DELETE FROM workspace_recommendations WHERE workspace_id = {self.database.placeholder}"
-        if self.database.scheme == "sqlite":
-            insert_sql = (
-                "INSERT INTO workspace_recommendations ("
-                "workspace_id, requirement_id, payload_json, created_at, updated_at"
-                ") VALUES (?, ?, ?, ?, ?)"
-            )
-        else:
-            insert_sql = (
-                "INSERT INTO workspace_recommendations ("
-                "workspace_id, requirement_id, payload_json, created_at, updated_at"
-                ") VALUES (%s, %s, %s, %s, %s)"
-            )
+        insert_sql = (
+            "INSERT INTO workspace_recommendations ("
+            "workspace_id, requirement_id, payload_json, created_at, updated_at"
+            ") VALUES (%s, %s, %s, %s, %s)"
+        )
         timestamp = updated_at or ""
         try:
             with self.database.connection() as connection:
@@ -536,31 +515,17 @@ class WorkspaceStore:
         )
 
         insert_columns = ["workspace_id", *STORY_DB_COLUMNS, "imported_at", "updated_at"]
-        if self.database.scheme == "sqlite":
-            placeholders = ", ".join("?" for _ in insert_columns)
-            update_columns = [column for column in STORY_DB_COLUMNS if column != "user_story_code"] + [
-                "imported_at",
-                "updated_at",
-            ]
-            update_clause = ", ".join(f"{column}=excluded.{column}" for column in update_columns)
-            upsert_sql = (
-                f"INSERT INTO workspace_story_records ({', '.join(insert_columns)}) "
-                f"VALUES ({placeholders}) "
-                "ON CONFLICT(workspace_id, user_story_code) DO UPDATE SET "
-                f"{update_clause}"
-            )
-        else:
-            placeholders = ", ".join("%s" for _ in insert_columns)
-            update_columns = [column for column in STORY_DB_COLUMNS if column != "user_story_code"] + [
-                "imported_at",
-                "updated_at",
-            ]
-            update_clause = ", ".join(f"{column}=VALUES({column})" for column in update_columns)
-            upsert_sql = (
-                f"INSERT INTO workspace_story_records ({', '.join(insert_columns)}) "
-                f"VALUES ({placeholders}) "
-                f"ON DUPLICATE KEY UPDATE {update_clause}"
-            )
+        placeholders = ", ".join("%s" for _ in insert_columns)
+        update_columns = [column for column in STORY_DB_COLUMNS if column != "user_story_code"] + [
+            "imported_at",
+            "updated_at",
+        ]
+        update_clause = ", ".join(f"{column}=VALUES({column})" for column in update_columns)
+        upsert_sql = (
+            f"INSERT INTO workspace_story_records ({', '.join(insert_columns)}) "
+            f"VALUES ({placeholders}) "
+            f"ON DUPLICATE KEY UPDATE {update_clause}"
+        )
 
         try:
             with self.database.connection() as connection:
@@ -615,10 +580,7 @@ class WorkspaceStore:
         select_columns = ", ".join(STORY_DB_COLUMNS)
         count_sql = f"SELECT COUNT(*) FROM workspace_story_records WHERE {where_clause}"
         data_sql = f"SELECT {select_columns} FROM workspace_story_records WHERE {where_clause} ORDER BY modified_time DESC, user_story_code"
-        if self.database.scheme == "sqlite":
-            data_sql += " LIMIT ? OFFSET ?"
-        else:
-            data_sql += " LIMIT %s OFFSET %s"
+        data_sql += " LIMIT %s OFFSET %s"
 
         offset = max(page - 1, 0) * page_size
 
@@ -706,31 +668,17 @@ class WorkspaceStore:
         )
 
         insert_columns = ["workspace_id", *TASK_DB_COLUMNS, "imported_at", "updated_at"]
-        if self.database.scheme == "sqlite":
-            placeholders = ", ".join("?" for _ in insert_columns)
-            update_columns = [column for column in TASK_DB_COLUMNS if column != "task_code"] + [
-                "imported_at",
-                "updated_at",
-            ]
-            update_clause = ", ".join(f"{column}=excluded.{column}" for column in update_columns)
-            upsert_sql = (
-                f"INSERT INTO workspace_task_records ({', '.join(insert_columns)}) "
-                f"VALUES ({placeholders}) "
-                "ON CONFLICT(workspace_id, task_code) DO UPDATE SET "
-                f"{update_clause}"
-            )
-        else:
-            placeholders = ", ".join("%s" for _ in insert_columns)
-            update_columns = [column for column in TASK_DB_COLUMNS if column != "task_code"] + [
-                "imported_at",
-                "updated_at",
-            ]
-            update_clause = ", ".join(f"{column}=VALUES({column})" for column in update_columns)
-            upsert_sql = (
-                f"INSERT INTO workspace_task_records ({', '.join(insert_columns)}) "
-                f"VALUES ({placeholders}) "
-                f"ON DUPLICATE KEY UPDATE {update_clause}"
-            )
+        placeholders = ", ".join("%s" for _ in insert_columns)
+        update_columns = [column for column in TASK_DB_COLUMNS if column != "task_code"] + [
+            "imported_at",
+            "updated_at",
+        ]
+        update_clause = ", ".join(f"{column}=VALUES({column})" for column in update_columns)
+        upsert_sql = (
+            f"INSERT INTO workspace_task_records ({', '.join(insert_columns)}) "
+            f"VALUES ({placeholders}) "
+            f"ON DUPLICATE KEY UPDATE {update_clause}"
+        )
 
         try:
             with self.database.connection() as connection:
@@ -835,10 +783,7 @@ class WorkspaceStore:
 
         order_clause = " ORDER BY modified_time DESC, task_code"
         if use_pagination:
-            if self.database.scheme == "sqlite":
-                order_clause += " LIMIT ? OFFSET ?"
-            else:
-                order_clause += " LIMIT %s OFFSET %s"
+            order_clause += " LIMIT %s OFFSET %s"
 
         sql = f"SELECT {select_columns} FROM workspace_task_records WHERE {where_clause}{order_clause}"
 
@@ -887,6 +832,32 @@ class WorkspaceStore:
     def _sorted_members(self, members: list[MemberProfile]) -> list[MemberProfile]:
         return sorted(list(members), key=lambda item: item.name)
 
+    def _load_requirements(self, workspace_id: str) -> list[RequirementItem]:
+        """Load requirements from DB and reconstruct as RequirementItem dataclass objects."""
+        req_dicts = self.req_repo.list_requirements(workspace_id)
+        requirements: list[RequirementItem] = []
+        for d in req_dicts:
+            req = RequirementItem(
+                requirement_id=str(d.get("requirement_id", "")),
+                title=str(d.get("title", "")),
+                source_url=str(d.get("source_url", "")),
+                priority=str(d.get("priority", "中")),
+                raw_text=str(d.get("raw_text", "")),
+                source=str(d.get("source", "chat")),
+                source_message=str(d.get("source_message", "")),
+                requirement_type=str(d.get("requirement_type", "")),
+                complexity=str(d.get("complexity", "中")),
+                risk=str(d.get("risk", "中")),
+                skills=d.get("skills") or [],
+                dependency_hints=d.get("dependency_hints") or [],
+                blockers=d.get("blockers") or [],
+                split_suggestion=d.get("split_suggestion"),
+                analysis_factors=d.get("analysis_factors") or [],
+                matched_module_keys=d.get("matched_module_keys") or [],
+            )
+            requirements.append(req)
+        return requirements
+
     def _normalize_session_ids(self, requirement_ids: list[str] | None) -> list[str]:
         normalized_ids: list[str] = []
         for item in requirement_ids or []:
@@ -904,20 +875,12 @@ class WorkspaceStore:
         summary: dict[str, Any],
     ) -> None:
         snapshot_at = datetime.utcnow().isoformat()
-        if self.database.scheme == "sqlite":
-            insert_sql = (
-                "INSERT INTO workspace_insight_snapshots ("
-                "workspace_id, snapshot_at, heatmap_json, single_points_json, "
-                "growth_suggestions_json, summary_json"
-                ") VALUES (?, ?, ?, ?, ?, ?)"
-            )
-        else:
-            insert_sql = (
-                "INSERT INTO workspace_insight_snapshots ("
-                "workspace_id, snapshot_at, heatmap_json, single_points_json, "
-                "growth_suggestions_json, summary_json"
-                ") VALUES (%s, %s, %s, %s, %s, %s)"
-            )
+        insert_sql = (
+            "INSERT INTO workspace_insight_snapshots ("
+            "workspace_id, snapshot_at, heatmap_json, single_points_json, "
+            "growth_suggestions_json, summary_json"
+            ") VALUES (%s, %s, %s, %s, %s, %s)"
+        )
         try:
             with self.database.connection() as connection:
                 cursor = connection.cursor()
@@ -942,14 +905,7 @@ class WorkspaceStore:
             "SELECT id, snapshot_at, heatmap_json, single_points_json, "
             "growth_suggestions_json, summary_json "
             f"FROM workspace_insight_snapshots WHERE workspace_id = {ph} "
-            "ORDER BY snapshot_at DESC LIMIT ?"
-            if self.database.scheme == "sqlite"
-            else (
-                "SELECT id, snapshot_at, heatmap_json, single_points_json, "
-                "growth_suggestions_json, summary_json "
-                f"FROM workspace_insight_snapshots WHERE workspace_id = {ph} "
-                "ORDER BY snapshot_at DESC LIMIT %s"
-            )
+            "ORDER BY snapshot_at DESC LIMIT %s"
         )
         try:
             with self.database.connection() as connection:
