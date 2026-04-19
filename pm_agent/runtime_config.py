@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 import tomllib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping
 from urllib.parse import urlparse
@@ -21,6 +21,7 @@ class WebRuntimeConfig:
     static_root: str
     database_url: str
     nvidia_api_key: str
+    models: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
 def load_web_runtime_config(
@@ -43,6 +44,8 @@ def load_web_runtime_config(
     nvidia_api_key = _resolve_value("nvidia_api_key", file_values, envvars, overrides, default="")
     normalized_database_url = _validate_database_url(str(database_url or ""), resolved_path, resolved_env)
 
+    models_config = _load_models_config(file_values)
+
     return WebRuntimeConfig(
         env=resolved_env,
         config_path=resolved_path,
@@ -51,6 +54,7 @@ def load_web_runtime_config(
         static_root=str(static_root),
         database_url=normalized_database_url,
         nvidia_api_key=str(nvidia_api_key or ""),
+        models=models_config,
     )
 
 
@@ -95,6 +99,12 @@ def _resolve_value(
         return file_value
 
     return default
+
+
+def _load_models_config(config_values: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
+    """加载 models 配置段，返回 {tier: {key: value}} 格式。"""
+    models = dict(config_values.get("models") or {})
+    return {k: dict(v) for k, v in models.items() if isinstance(v, dict)}
 
 
 def _validate_database_url(database_url: str, config_path: Path, env_name: str) -> str:

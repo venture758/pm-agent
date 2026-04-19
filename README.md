@@ -11,8 +11,10 @@
 
 当前仓库还包含一个前后端分离的 Web 工作台：
 
-- 后端：Python API，复用 `pm_agent` 领域逻辑
+- 后端：Java API（`backend-java`，Spring Boot + MyBatis）
 - 前端：Vue 单页应用，提供需求录入、业务模块维护、人员管理、推荐确认、交付管理（故事/任务）、监控和洞察页面
+
+> 生产后端已切换为 Java 实现，Python 后端仅作为迁移期回滚与对照资产，不再作为默认生产写入路径。
 
 ## 目录结构
 
@@ -110,11 +112,19 @@ config/pm_agent.toml
 - 可通过 `PM_AGENT_CONFIG` 或 `--config` 指向其他配置文件
 - 覆盖优先级：`CLI 参数 > 环境变量 > 配置文件`
 
-后端 API：
+Java 后端 API：
 
 ```bash
-python3 -m pm_agent_web
+JAVA_HOME=/Library/Java/JavaVirtualMachines/temurin-21.jdk/Contents/Home \
+mvn -f backend-java/pom.xml spring-boot:run -Dspring-boot.run.profiles=dev
 ```
+
+数据库迁移/回滚脚本说明见：
+
+- `backend-java/README.md`
+- `docs/java-cutover/runbook.md`
+- `docs/java-cutover/smoke-checklist.md`
+- `docs/java-cutover/migration-acceptance-report.md`
 
 初始化 MySQL（先建库，再执行 DDL）：
 
@@ -139,19 +149,7 @@ mysql -h127.0.0.1 -u<user> -p pm_agent < db/migrate.mysql.module-entries.sql
 - 回滚应用版本后可不删除 `workspace_story_records`（保留数据，接口不再读取即可）。
 - 如需临时禁用功能，可前端隐藏“单独上传故事 Excel”入口，后端不调用 story-only 路由。
 
-数据库连接是必填前置条件。现在默认从 `config/pm_agent.toml` 读取。
-
-示例：
-
-```bash
-PM_AGENT_ENV=prod python3 -m pm_agent_web
-```
-
-如果要临时覆盖数据库地址，仍然可以：
-
-```bash
-python3 -m pm_agent_web --host 127.0.0.1 --port 8000 --database-url "mysql://user:pass@127.0.0.1:3306/pm_agent?charset=utf8mb4"
-```
+数据库连接是必填前置条件，Java 服务默认读取 `backend-java/src/main/resources/application.yml` 与对应 profile 配置。
 
 前端：
 
@@ -161,10 +159,16 @@ npm install
 npm run dev
 ```
 
+如 Java 后端不是默认 `8080` 端口，可通过环境变量覆盖前端代理目标：
+
+```bash
+VITE_API_PROXY_TARGET=http://127.0.0.1:18080 npm run dev
+```
+
 访问地址：
 
 - 前端开发环境：`http://127.0.0.1:5173`
-- 后端 API：`http://127.0.0.1:8000/api/health`
+- 后端 API：`http://127.0.0.1:8080/api/v2/health`
 
 ## 联调流程
 

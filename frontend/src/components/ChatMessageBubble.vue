@@ -23,7 +23,7 @@ defineProps({
     default: false,
   },
 });
-const emit = defineEmits(["generate"]);
+const emit = defineEmits(["generate", "start-pipeline"]);
 
 function priorityType(type) {
   const map = { 高: "danger", 中: "warning", 低: "info" };
@@ -89,6 +89,15 @@ function priorityType(type) {
             @click="emit('generate')"
           >
             {{ generating ? "生成中" : "生成推荐" }}
+          </ElButton>
+          <ElButton
+            type="success"
+            class="pipeline-inline-button"
+            size="small"
+            :disabled="generating"
+            @click="emit('start-pipeline')"
+          >
+            启动 Pipeline 分析
           </ElButton>
           <span class="bubble-action-hint">基于当前解析结果生成分配建议</span>
         </div>
@@ -195,6 +204,10 @@ function priorityType(type) {
 }
 
 .generate-inline-button {
+  border-radius: 999px;
+}
+
+.pipeline-inline-button {
   border-radius: 999px;
 }
 

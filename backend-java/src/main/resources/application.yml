@@ -1,0 +1,26 @@
+spring:
+  application:
+    name: pm-agent-backend
+  profiles:
+    active: ${PM_AGENT_ENV:dev}
+  jackson:
+    default-property-inclusion: non_null
+  datasource:
+    driver-class-name: com.mysql.cj.jdbc.Driver
+
+mybatis:
+  configuration:
+    map-underscore-to-camel-case: true
+    call-setters-on-nulls: true
+  type-aliases-package: com.pmagent.backend.infrastructure.entity
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+
+logging:
+  level:
+    root: INFO
+    com.pmagent.backend: INFO

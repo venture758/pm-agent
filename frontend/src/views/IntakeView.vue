@@ -1,9 +1,11 @@
 <script setup>
 import { computed, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
+import { ElMessage } from "element-plus";
 
 import { useWorkspaceStore } from "../stores/workspace";
 import ChatView from "../components/ChatView.vue";
+import PipelinePanel from "../components/PipelinePanel.vue";
 
 const workspaceStore = useWorkspaceStore();
 const route = useRoute();
@@ -14,10 +16,13 @@ const workspaceId = computed(() => route.params.workspaceId || workspaceStore.wo
 const requirementCount = computed(() => workspaceStore.workspace.requirements.length);
 const sessionList = computed(() => workspaceStore.session_list || []);
 const activeSessionId = computed(() => workspaceStore.activeSessionId || "");
+const pipelineState = computed(() => workspaceStore.pipelineState);
+const pipelineActive = computed(() => workspaceStore.pipelineActive);
 
 const sidebarCollapsed = ref(false);
 const sidebarOpenMobile = ref(false);
 const isNarrowScreen = ref(false);
+const pipelineDrawerOpen = ref(false);
 
 async function handleSendMessage(text) {
   try {
@@ -84,10 +89,43 @@ function checkScreenSize() {
   }
 }
 
+async function handleStartPipeline() {
+  try {
+    const result = await workspaceStore.startPipeline("");
+    if (result?.current_step) {
+      if (isNarrowScreen.value) {
+        pipelineDrawerOpen.value = true;
+      }
+    }
+  } catch {
+    // error handled by store
+  }
+}
+
+async function handlePipelineComplete() {
+  workspaceStore.pipelineState = null;
+  pipelineDrawerOpen.value = false;
+  ElMessage.success("Pipeline 分析完成，正在刷新数据");
+  await workspaceStore.loadWorkspace(workspaceId.value);
+}
+
+function handlePipelineClose() {
+  workspaceStore.pipelineState = null;
+  pipelineDrawerOpen.value = false;
+}
+
 onMounted(() => {
   checkScreenSize();
   window.addEventListener("resize", checkScreenSize);
   workspaceStore.loadSessions().catch(() => {});
+  // Restore pipeline state if active
+  workspaceStore.loadPipelineState().then((state) => {
+    if (state && !state.is_complete) {
+      if (isNarrowScreen.value) {
+        pipelineDrawerOpen.value = true;
+      }
+    }
+  }).catch(() => {});
 });
 
 watch(
@@ -169,7 +207,7 @@ watch(
     </aside>
 
     <!-- Main area -->
-    <main class="main-area">
+    <main class="main-area" :class="{ 'has-pipeline': pipelineActive && !isNarrowScreen }">
       <!-- Mobile top bar -->
       <div v-if="isNarrowScreen" class="mobile-topbar">
         <button class="hamburger" @click="toggleSidebar">
@@ -196,6 +234,7 @@ watch(
           :generating="workspaceStore.loading"
           @send="handleSendMessage"
           @generate="generateRecommendations"
+          @start-pipeline="handleStartPipeline"
         />
 
         <!-- Action chips (when no messages) -->
@@ -212,6 +251,33 @@ watch(
         <p v-if="workspaceStore.error" class="chat-error">{{ workspaceStore.error }}</p>
       </div>
     </main>
+
+    <!-- Desktop Pipeline Panel -->
+    <aside
+      v-if="pipelineActive && !isNarrowScreen && pipelineState"
+      class="pipeline-right-panel"
+    >
+      <PipelinePanel
+        :pipeline-state="pipelineState"
+        @close="handlePipelineClose"
+        @complete="handlePipelineComplete"
+      />
+    </aside>
+
+    <!-- Mobile Pipeline Drawer -->
+    <div
+      v-if="isNarrowScreen && pipelineDrawerOpen && pipelineState"
+      class="pipeline-drawer-overlay"
+      @click="pipelineDrawerOpen = false"
+    >
+      <div class="pipeline-drawer" @click.stop>
+        <PipelinePanel
+          :pipeline-state="pipelineState"
+          @close="handlePipelineClose"
+          @complete="handlePipelineComplete"
+        />
+      </div>
+    </div>
   </section>
 </template>
 
@@ -509,6 +575,43 @@ watch(
   max-width: 760px;
   width: 100%;
   margin: 0 auto;
+}
+
+.main-area.has-pipeline .chat-content {
+  max-width: 600px;
+}
+
+/* Desktop right pipeline panel */
+.pipeline-right-panel {
+  width: 420px;
+  min-width: 420px;
+  border-left: 1px solid #e5e5e5;
+  background: #fafafa;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Mobile pipeline drawer */
+.pipeline-drawer-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.3);
+  z-index: 300;
+  display: flex;
+  align-items: flex-end;
+}
+
+.pipeline-drawer {
+  width: 100%;
+  height: 85vh;
+  background: #fafafa;
+  border-radius: 12px 12px 0 0;
+  animation: drawerSlideUp 0.3s ease both;
+}
+
+@keyframes drawerSlideUp {
+  from { transform: translateY(100%); }
+  to { transform: translateY(0); }
 }
 
 /* Model selector */

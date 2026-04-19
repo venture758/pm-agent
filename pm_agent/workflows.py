@@ -14,7 +14,7 @@ from .agent_prompt import (
     build_module_knowledge_summary,
 )
 from .assignment import build_story_and_task_handoff, confirm_assignments, recommend_assignments, render_group_reply
-from .config import WORKFLOW_CONFIGS
+from .config import WORKFLOW_CONFIGS, MODEL_CONFIG, MODEL_TIERS
 from .insights import build_load_heatmap, detect_single_points, suggest_growth_paths
 from .intake import (
     build_profiles_from_module_entries,
@@ -58,8 +58,8 @@ class ProjectManagerAgent:
         self.state: AgentState = self.store.load_state()
         self.workflow_configs = WORKFLOW_CONFIGS
         self._llm: LlmClient | None = None
-        if dashscope_api_key:
-            self._llm = LlmClient(api_key=dashscope_api_key)
+        if MODEL_CONFIG:
+            self._llm = LlmClient(model_config=MODEL_CONFIG, tiers=MODEL_TIERS)
 
     @property
     def llm_available(self) -> bool:
@@ -219,13 +219,13 @@ class ProjectManagerAgent:
         )
 
         logger.info("[chat.llm] 发起 LLM 请求 prompt_len=%d user_msg_len=%d", len(system_prompt), len(user_message))
-        response_text = self._llm.chat_completion(
+        response_text, llm_stats = self._llm.chat_completion(
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_message},
             ]
         )
-        logger.info("[chat.llm] LLM 返回 response_len=%d", len(response_text))
+        logger.info("[chat.llm] LLM 返回 response_len=%d tier=%s", len(response_text), llm_stats.final_tier)
 
         parsed = self._llm.parse_json_response(response_text)
         requirements: list[RequirementItem] = []
@@ -278,7 +278,7 @@ class ProjectManagerAgent:
         history = build_assignment_history(self.state.confirmed_assignments.values())
 
         try:
-            response_text = self._llm.chat_completion(
+            response_text, llm_stats = self._llm.chat_completion(
                 messages=[
                     {"role": "system", "content": KNOWLEDGE_UPDATE_PROMPT},
                     {

@@ -1046,6 +1046,25 @@ class WebWorkbenchTest(unittest.TestCase):
             self.assertEqual(1, payload["page"])
             self.assertEqual(20, payload["page_size"])
 
+    def test_v2_prefix_confirmation_history_pagination(self) -> None:
+        """GET /api/v2/workspaces/:id/confirmations should be backward compatible."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app = self._create_app(tmpdir)
+            status, payload = self._request(app, "GET", "/api/v2/workspaces/default/confirmations")
+            self.assertTrue(status.startswith("200"))
+            self.assertEqual(0, payload["total"])
+            self.assertEqual([], payload["items"])
+            self.assertEqual(1, payload["page"])
+            self.assertEqual(20, payload["page_size"])
+
+    def test_v2_prefix_health(self) -> None:
+        """GET /api/v2/health should map to health endpoint."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app = self._create_app(tmpdir)
+            status, payload = self._request(app, "GET", "/api/v2/health")
+            self.assertTrue(status.startswith("200"))
+            self.assertEqual("ok", payload["status"])
+
     def test_confirmation_history_returns_records(self) -> None:
         """After confirming assignments, GET confirmations should return the record."""
         with tempfile.TemporaryDirectory() as tmpdir:

@@ -5,6 +5,7 @@ import logging
 from wsgiref.simple_server import make_server
 
 from pm_agent.api import create_api_app
+from pm_agent.config import MODEL_CONFIG, MODEL_TIERS
 from pm_agent.runtime_config import load_web_runtime_config
 
 ## lsof -nP -iTCP:8000 -sTCP:LISTEN
@@ -47,10 +48,12 @@ def main() -> None:
             "或设置 PM_AGENT_DATABASE_URL，或传入 --database-url"
         )
 
+    # 从运行时配置加载模型配置
+    MODEL_CONFIG.update(runtime.models)
+
     app = create_api_app(
         static_root=runtime.static_root,
         database_url=runtime.database_url,
-        dashscope_api_key=runtime.nvidia_api_key,
     )
     with make_server(runtime.host, runtime.port, app) as server:
         print(f"pm-agent web api listening on http://{runtime.host}:{runtime.port} (env={runtime.env})")

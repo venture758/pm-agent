@@ -5,12 +5,34 @@ static_root = "frontend/dist"
 
 [dev]
 database_url = "mysql://root:@Admin123456@127.0.0.1:3306/pm_agent?charset=utf8mb4"
-nvidia_api_key = "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"
+
+# LLM 模型降级策略配置 — primary 使用 nvidia_api_key，fallback/last_resort 使用环境变量
+[dev.models.primary]
+base_url = "https://coding.dashscope.aliyuncs.com/v1"
+api_key = "sk-sp-b75d8ad0933449eb89d6cf52706c716e"
+model = "qwen3.6-plus"
+temperature = 0.3
+max_tokens = 20000
+timeout = 60
+
+[dev.models.fallback]
+base_url = "https://integrate.api.nvidia.com/v1"
+api_key = "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"
+model = "z-ai/glm4.7"
+temperature = 0.3
+max_tokens = 20000
+timeout = 60
+
+[dev.models.last_resort]
+base_url = "https://api.openai.com/v1"
+api_key_env = "OPENAI_API_KEY"
+model = "gpt-4o-mini"
+temperature = 0.3
+max_tokens = 2048
+timeout = 15
 
 [test]
 database_url = ""
-nvidia_api_key = ""
 
 [prod]
 database_url = ""
-nvidia_api_key = ""

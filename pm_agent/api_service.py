@@ -54,11 +54,9 @@ class WorkspaceService:
     def __init__(
         self,
         database_url: str | None = None,
-        dashscope_api_key: str = "",
     ) -> None:
         self.agent = ProjectManagerAgent(
             database_url=database_url,
-            dashscope_api_key=dashscope_api_key,
         )
         self.workspaces = WorkspaceStore(database_url=database_url)
         # New repositories for chat, requirements, and workspace metadata
@@ -742,6 +740,62 @@ class WorkspaceService:
             "workspace_id": workspace_id,
             "history": history,
         }
+
+    # ---------- Analysis Pipeline ----------
+
+    def start_analysis_pipeline(self, workspace_id: str, user_message: str) -> dict[str, Any]:
+        """启动分析 Pipeline，执行步骤1（需求解析）。"""
+        from .agents.orchestrator import OrchestratorAgent
+
+        workspace = self._load_workspace(workspace_id)
+        profiles = self._build_managed_member_profiles(workspace)
+        profiles_dict = [_jsonable(p) for p in profiles]
+        module_entries_dict = [_jsonable(e) for e in workspace.module_entries]
+        task_records = self.workspaces.load_task_records_by_workspace_id(workspace_id)
+        task_records_dict = [_jsonable(t) for t in task_records]
+
+        # 创建 orchestrator（复用 workspace 的 LLM）
+        llm = self.agent._llm if hasattr(self.agent, "_llm") and self.agent._llm else None
+        orchestrator = OrchestratorAgent(llm_client=llm)
+
+        result = orchestrator.start(
+            workspace_id=workspace_id,
+            user_message=user_message,
+            profiles=profiles_dict,
+            module_entries=module_entries_dict,
+            task_records=task_records_dict,
+        )
+        return result
+
+    def get_pipeline_state(self, workspace_id: str) -> dict[str, Any]:
+        """获取 Pipeline 当前状态。无活跃 Pipeline 时返回空状态。"""
+        from .agents.orchestrator import OrchestratorAgent
+
+        llm = self.agent._llm if hasattr(self.agent, "_llm") and self.agent._llm else None
+        orchestrator = OrchestratorAgent(llm_client=llm)
+        state = orchestrator.get_state(workspace_id)
+        if not state:
+            return {"status": "none"}
+        return state
+
+    def confirm_pipeline_step(
+        self,
+        workspace_id: str,
+        action: str,
+        modifications: dict | None = None,
+        feedback: str | None = None,
+    ) -> dict[str, Any]:
+        """确认/修改/重新分析当前步骤。"""
+        from .agents.orchestrator import OrchestratorAgent
+
+        llm = self.agent._llm if hasattr(self.agent, "_llm") and self.agent._llm else None
+        orchestrator = OrchestratorAgent(llm_client=llm)
+        return orchestrator.confirm_step(
+            workspace_id=workspace_id,
+            action=action,
+            modifications=modifications,
+            feedback=feedback,
+        )
 
     def list_confirmation_records(
         self,

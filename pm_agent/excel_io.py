@@ -2,12 +2,12 @@ from __future__ import annotations
 
 from io import BytesIO
 from pathlib import Path
-from typing import BinaryIO
+from typing import BinaryIO, Union
 
-ExcelInput = str | Path | bytes | bytearray | BinaryIO
+ExcelInput = Union[str, Path, bytes, bytearray, BinaryIO]
 
 
-def workbook_stream(source: ExcelInput) -> str | Path | BytesIO:
+def workbook_stream(source: ExcelInput) -> Union[str, Path, BytesIO]:
     if isinstance(source, (str, Path)):
         return source
     if isinstance(source, (bytes, bytearray)):

@@ -35,11 +35,9 @@ class ApiApplication:
         self,
         static_root: str | Path = "frontend/dist",
         database_url: str | None = None,
-        dashscope_api_key: str = "",
     ) -> None:
         self.service = WorkspaceService(
             database_url=database_url,
-            dashscope_api_key=dashscope_api_key,
         )
         self.static_root = Path(static_root)
 
@@ -65,6 +63,8 @@ class ApiApplication:
 
     def _dispatch_api(self, method: str, path: str, environ: dict[str, Any]) -> tuple[int, dict[str, Any]]:
         segments = [segment for segment in path.split("/") if segment]
+        if len(segments) >= 2 and segments[1].startswith("v") and segments[1][1:].isdigit():
+            segments = [segments[0], *segments[2:]]
         if segments == ["api", "health"] and method == "GET":
             return 200, {"status": "ok"}
         if len(segments) < 3 or segments[1] != "workspaces":
@@ -183,7 +183,20 @@ class ApiApplication:
             return 200, self.service.get_chat_session_messages(workspace_id, segments[5])
         if len(segments) == 6 and segments[3] == "chat" and segments[4] == "sessions" and method == "DELETE":
             return 200, self.service.delete_chat_session(workspace_id, segments[5])
-        raise ValueError("不支持的 API 请求")
+        if len(segments) == 5 and segments[3] == "pipeline" and segments[4] == "start" and method == "POST":
+            payload = self._read_json_body(environ)
+            return 200, self.service.start_analysis_pipeline(workspace_id, payload.get("message", ""))
+        if len(segments) == 5 and segments[3] == "pipeline" and segments[4] == "state" and method == "GET":
+            return 200, self.service.get_pipeline_state(workspace_id)
+        if len(segments) == 5 and segments[3] == "pipeline" and segments[4] == "confirm" and method == "POST":
+            payload = self._read_json_body(environ)
+            return 200, self.service.confirm_pipeline_step(
+                workspace_id,
+                action=payload.get("action", "confirm"),
+                modifications=payload.get("modifications"),
+                feedback=payload.get("feedback"),
+            )
+        raise ValueError(f"不支持的 API 请求: {method} {path} segments={segments}")
 
     def _read_json_body(self, environ: dict[str, Any]) -> dict[str, Any]:
         content_length = int(environ.get("CONTENT_LENGTH") or 0)
@@ -253,10 +266,8 @@ class ApiApplication:
 def create_api_app(
     static_root: str | Path = "frontend/dist",
     database_url: str | None = None,
-    dashscope_api_key: str = "",
 ) -> ApiApplication:
     return ApiApplication(
         static_root=static_root,
         database_url=database_url,
-        dashscope_api_key=dashscope_api_key,
     )

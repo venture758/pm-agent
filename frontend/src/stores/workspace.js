@@ -2,6 +2,22 @@ import { defineStore } from "pinia";
 
 import { apiClient } from "../api/client";
 
+const PIPELINE_STEPS = [
+  "requirement_parsing",
+  "personnel_matching",
+  "module_extraction",
+  "team_analysis",
+  "knowledge_update",
+];
+
+const PIPELINE_STEP_LABELS = {
+  requirement_parsing: "需求解析",
+  personnel_matching: "人员匹配",
+  module_extraction: "模块提炼",
+  team_analysis: "梯队分析",
+  knowledge_update: "知识更新",
+};
+
 const EMPTY_WORKSPACE = () => ({
   workspace_id: "default",
   title: "default",
@@ -36,6 +52,7 @@ const EMPTY_WORKSPACE = () => ({
   },
   latest_sync_batch: null,
   latest_story_import: null,
+  latest_task_import: null,
   uploads: [],
   messages: [],
   knowledge_base_summary: {
@@ -47,6 +64,143 @@ const EMPTY_WORKSPACE = () => ({
   active_session_id: "",
   session_list: [],
 });
+
+function asArray(value) {
+  return Array.isArray(value) ? value : [];
+}
+
+function toPositiveInt(value, fallback) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) {
+    return fallback;
+  }
+  return Math.floor(n);
+}
+
+function toTotalPages(total, pageSize) {
+  const totalValue = Number(total);
+  const pageSizeValue = Number(pageSize);
+  if (!Number.isFinite(totalValue) || totalValue <= 0 || !Number.isFinite(pageSizeValue) || pageSizeValue <= 0) {
+    return 0;
+  }
+  return Math.ceil(totalValue / pageSizeValue);
+}
+
+function normalizeRecommendation(item = {}) {
+  return {
+    requirement_id: item.requirement_id || "",
+    title: item.title || "",
+    module_name: item.module_name || "",
+    development_owner: item.development_owner || item.developer || "",
+    testing_owner: item.testing_owner || item.tester || "",
+    backup_owner: item.backup_owner || "",
+    collaborators: asArray(item.collaborators),
+    confidence: Number(item.confidence ?? 0),
+    reason: item.reason || "",
+    split_suggestion: item.split_suggestion || "",
+    unassigned_reason: item.unassigned_reason || "",
+  };
+}
+
+function inferRequirementsFromMessages(messages) {
+  const dedup = new Map();
+  asArray(messages).forEach((message) => {
+    asArray(message.parsed_requirements).forEach((item) => {
+      const requirementId = String(item.requirement_id || "").trim();
+      if (!requirementId) {
+        return;
+      }
+      dedup.set(requirementId, item);
+    });
+  });
+  return [...dedup.values()];
+}
+
+function mapPipelineStepStatus(rawStatus) {
+  if (rawStatus === "completed" || rawStatus === "skipped") {
+    return "completed";
+  }
+  if (rawStatus === "in_progress") {
+    return "current";
+  }
+  return "pending";
+}
+
+function normalizePipelineState(payload) {
+  if (!payload || typeof payload !== "object") {
+    return null;
+  }
+  if (payload.status === "idle" || payload.status === "none") {
+    return null;
+  }
+
+  const progressMap = payload.step_progress && typeof payload.step_progress === "object"
+    ? payload.step_progress
+    : {};
+  const stepResults = payload.step_results && typeof payload.step_results === "object"
+    ? payload.step_results
+    : {};
+  const currentStep = String(payload.current_step || "");
+
+  const stepProgress = PIPELINE_STEPS.map((step) => ({
+    step,
+    label: PIPELINE_STEP_LABELS[step] || step,
+    status: mapPipelineStepStatus(progressMap[step]),
+  }));
+
+  let currentStepIndex = PIPELINE_STEPS.indexOf(currentStep);
+  if (currentStepIndex < 0) {
+    currentStepIndex = -1;
+    for (let i = stepProgress.length - 1; i >= 0; i -= 1) {
+      if (stepProgress[i].status === "completed") {
+        currentStepIndex = i;
+        break;
+      }
+    }
+    if (currentStepIndex < 0) {
+      currentStepIndex = 0;
+    }
+  }
+
+  const requirementResult = stepResults.requirement_parsing || {};
+  const matchResult = stepResults.personnel_matching || {};
+  const moduleResult = stepResults.module_extraction || {};
+  const teamResult = stepResults.team_analysis || {};
+  const knowledgeResult = stepResults.knowledge_update || {};
+  const currentResult = currentStep ? (stepResults[currentStep] || {}) : {};
+  const normalizedStatus = payload.status === "completed" ? "complete" : String(payload.status || "running");
+
+  return {
+    ...payload,
+    status: normalizedStatus,
+    is_complete: normalizedStatus === "complete",
+    current_step: currentStep,
+    current_step_index: currentStepIndex,
+    step_progress: stepProgress,
+    step_results: stepResults,
+    requirements: asArray(requirementResult.requirements || requirementResult.items),
+    assignment_suggestions: asArray(matchResult.assignment_suggestions || matchResult.items),
+    module_changes: asArray(moduleResult.module_changes || moduleResult.items),
+    team_analysis: teamResult,
+    pending_changes: asArray(knowledgeResult.pending_changes || knowledgeResult.items),
+    reply: currentResult.summary || payload.reply || "",
+  };
+}
+
+function normalizeConfirmationItem(item = {}) {
+  const assignments = asArray(item.confirmed_assignments || item.payload).map(normalizeRecommendation);
+  return {
+    session_id: item.session_id || "",
+    confirmed_count: Number(item.confirmed_count || assignments.length),
+    created_at: item.created_at || "",
+    confirmed_assignments: assignments,
+    knowledge_update: {
+      status: "skipped",
+      has_module_diff_records: false,
+      reply: "当前会话未执行知识更新分析。",
+    },
+  };
+}
 
 export const useWorkspaceStore = defineStore("workspace", {
   state: () => ({
@@ -78,6 +232,7 @@ export const useWorkspaceStore = defineStore("workspace", {
     knowledgeUpdateModuleDiffs: {},
     chatSessions: [],
     activeSessionId: "",
+    session_list: [],
     storyPagination: {
       items: [],
       page: 1,
@@ -95,34 +250,49 @@ export const useWorkspaceStore = defineStore("workspace", {
     },
     loading: false,
     error: "",
+    pipelineState: null,
   }),
   actions: {
-    applyWorkspace(payload) {
-      this.workspace = {
-        ...EMPTY_WORKSPACE(),
+    applyWorkspace(payload = {}) {
+      if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+        return;
+      }
+      const nextWorkspace = {
+        ...this.workspace,
         ...payload,
+        draft: {
+          ...this.workspace.draft,
+          ...(payload.draft || {}),
+        },
       };
+      this.workspace = nextWorkspace;
       this.workspaceId = payload.workspace_id || this.workspaceId;
       this.activeSessionId = payload.active_session_id || this.activeSessionId;
-      this.session_list = payload.session_list || [];
-      if (payload.active_session_id && !this.activeSessionId) {
-        this.activeSessionId = payload.active_session_id;
-      }
-      const modulePage = payload.module_page || {};
+      this.session_list = payload.session_list || this.session_list;
+      this.workspace.active_session_id = this.activeSessionId;
+      this.workspace.session_list = this.session_list;
+
+      const modulePage = payload.module_page || this.workspace.module_page || {};
       const filters = modulePage.filters || {};
       this.moduleQuery = {
-        page: Number(modulePage.page) > 0 ? Number(modulePage.page) : this.moduleQuery.page || 1,
-        page_size: Number(modulePage.page_size) > 0 ? Number(modulePage.page_size) : this.moduleQuery.page_size || 50,
+        page: toPositiveInt(modulePage.page, this.moduleQuery.page || 1),
+        page_size: toPositiveInt(modulePage.page_size, this.moduleQuery.page_size || 50),
         big_module: String(filters.big_module || ""),
         function_module: String(filters.function_module || ""),
         primary_owner: String(filters.primary_owner || ""),
       };
       this.error = "";
     },
+
     async loadWorkspace(workspaceId = this.workspaceId) {
       this.loading = true;
       try {
-        this.applyWorkspace(await apiClient.getWorkspace(workspaceId));
+        const payload = await apiClient.getWorkspace(workspaceId);
+        this.applyWorkspace({
+          workspace_id: payload.workspace_id || workspaceId,
+          title: payload.title || this.workspace.title,
+          updated_at: payload.updated_at || this.workspace.updated_at,
+        });
       } catch (error) {
         this.error = error.message;
         throw error;
@@ -130,10 +300,23 @@ export const useWorkspaceStore = defineStore("workspace", {
         this.loading = false;
       }
     },
+
     async saveDraft(payload) {
       this.loading = true;
       try {
-        this.applyWorkspace(await apiClient.saveDraft(this.workspaceId, payload));
+        const result = await apiClient.saveDraft(this.workspaceId, payload);
+        this.applyWorkspace({
+          workspace_id: result.workspace_id || this.workspaceId,
+          title: result.title || this.workspace.title,
+          updated_at: result.updated_at || this.workspace.updated_at,
+          draft: {
+            ...this.workspace.draft,
+            draft_mode: result.draft_mode || payload?.draft_mode || "chat",
+            message_text: result.message_text || payload?.message_text || "",
+            requirement_rows: result.requirement_rows || payload?.requirement_rows || [],
+            team_rows: result.team_rows || payload?.team_rows || [],
+          },
+        });
       } catch (error) {
         this.error = error.message;
         throw error;
@@ -141,22 +324,44 @@ export const useWorkspaceStore = defineStore("workspace", {
         this.loading = false;
       }
     },
+
     async refreshModules(query = {}) {
       this.loading = true;
       try {
-        const mergedQuery = {
-          ...this.moduleQuery,
-          ...query,
-        };
+        const mergedQuery = { ...this.moduleQuery, ...query };
         const normalizedQuery = {
-          page: Number(mergedQuery.page) > 0 ? Number(mergedQuery.page) : 1,
-          page_size: Number(mergedQuery.page_size) > 0 ? Number(mergedQuery.page_size) : 50,
+          page: toPositiveInt(mergedQuery.page, 1),
+          page_size: toPositiveInt(mergedQuery.page_size, 50),
           big_module: String(mergedQuery.big_module || ""),
           function_module: String(mergedQuery.function_module || ""),
           primary_owner: String(mergedQuery.primary_owner || ""),
         };
         this.moduleQuery = normalizedQuery;
-        this.applyWorkspace(await apiClient.getModules(this.workspaceId, normalizedQuery));
+
+        const payload = await apiClient.getModules(this.workspaceId, normalizedQuery);
+        const items = asArray(payload.items).map((item) => ({
+          ...item,
+          backup_owners: asArray(item.backup_owners),
+          familiar_members: asArray(item.familiar_members),
+          aware_members: asArray(item.aware_members),
+          unfamiliar_members: asArray(item.unfamiliar_members),
+        }));
+        const pageSize = toPositiveInt(payload.page_size, normalizedQuery.page_size);
+        const total = Number(payload.total || 0);
+        const totalPages = toTotalPages(total, pageSize);
+        this.workspace.module_entries = items;
+        this.workspace.module_page = {
+          page: toPositiveInt(payload.page, normalizedQuery.page),
+          page_size: pageSize,
+          total,
+          total_pages: totalPages || 1,
+          filters: {
+            big_module: normalizedQuery.big_module,
+            function_module: normalizedQuery.function_module,
+            primary_owner: normalizedQuery.primary_owner,
+          },
+        };
+        this.error = "";
       } catch (error) {
         this.error = error.message;
         throw error;
@@ -164,6 +369,7 @@ export const useWorkspaceStore = defineStore("workspace", {
         this.loading = false;
       }
     },
+
     async createModule(payload) {
       this.loading = true;
       try {
@@ -176,6 +382,7 @@ export const useWorkspaceStore = defineStore("workspace", {
         this.loading = false;
       }
     },
+
     async updateModule(moduleKey, payload) {
       this.loading = true;
       try {
@@ -188,6 +395,7 @@ export const useWorkspaceStore = defineStore("workspace", {
         this.loading = false;
       }
     },
+
     async deleteModule(moduleKey) {
       this.loading = true;
       try {
@@ -202,10 +410,14 @@ export const useWorkspaceStore = defineStore("workspace", {
         this.loading = false;
       }
     },
+
     async refreshMembers() {
       this.loading = true;
       try {
-        this.applyWorkspace(await apiClient.getMembers(this.workspaceId));
+        const members = asArray(await apiClient.getMembers(this.workspaceId));
+        this.workspace.managed_members = members;
+        this.workspace.members = members;
+        this.error = "";
       } catch (error) {
         this.error = error.message;
         throw error;
@@ -213,10 +425,12 @@ export const useWorkspaceStore = defineStore("workspace", {
         this.loading = false;
       }
     },
+
     async createMember(payload) {
       this.loading = true;
       try {
-        this.applyWorkspace(await apiClient.createMember(this.workspaceId, payload));
+        await apiClient.createMember(this.workspaceId, payload);
+        await this.refreshMembers();
       } catch (error) {
         this.error = error.message;
         throw error;
@@ -224,10 +438,12 @@ export const useWorkspaceStore = defineStore("workspace", {
         this.loading = false;
       }
     },
+
     async updateMember(memberName, payload) {
       this.loading = true;
       try {
-        this.applyWorkspace(await apiClient.updateMember(this.workspaceId, memberName, payload));
+        await apiClient.updateMember(this.workspaceId, memberName, payload);
+        await this.refreshMembers();
       } catch (error) {
         this.error = error.message;
         throw error;
@@ -235,10 +451,12 @@ export const useWorkspaceStore = defineStore("workspace", {
         this.loading = false;
       }
     },
+
     async deleteMember(memberName) {
       this.loading = true;
       try {
-        this.applyWorkspace(await apiClient.deleteMember(this.workspaceId, memberName));
+        await apiClient.deleteMember(this.workspaceId, memberName);
+        await this.refreshMembers();
       } catch (error) {
         this.error = error.message;
         throw error;
@@ -246,10 +464,14 @@ export const useWorkspaceStore = defineStore("workspace", {
         this.loading = false;
       }
     },
+
     async generateRecommendations() {
       this.loading = true;
       try {
-        this.applyWorkspace(await apiClient.generateRecommendations(this.workspaceId));
+        const payload = await apiClient.generateRecommendations(this.workspaceId);
+        this.workspace.recommendations = asArray(payload.recommendations).map(normalizeRecommendation);
+        this.workspace.group_reply_preview = payload.group_reply_preview || "";
+        this.error = "";
       } catch (error) {
         this.error = error.message;
         throw error;
@@ -257,10 +479,15 @@ export const useWorkspaceStore = defineStore("workspace", {
         this.loading = false;
       }
     },
+
     async deleteRecommendation(requirementId) {
       this.loading = true;
       try {
-        this.applyWorkspace(await apiClient.deleteRecommendation(this.workspaceId, requirementId));
+        await apiClient.deleteRecommendation(this.workspaceId, requirementId);
+        this.workspace.recommendations = asArray(this.workspace.recommendations).filter(
+          (item) => item.requirement_id !== requirementId,
+        );
+        this.error = "";
       } catch (error) {
         this.error = error.message;
         throw error;
@@ -268,10 +495,16 @@ export const useWorkspaceStore = defineStore("workspace", {
         this.loading = false;
       }
     },
+
     async batchDeleteRecommendations(requirementIds) {
       this.loading = true;
       try {
-        this.applyWorkspace(await apiClient.batchDeleteRecommendations(this.workspaceId, requirementIds));
+        const ids = new Set(asArray(requirementIds));
+        await apiClient.batchDeleteRecommendations(this.workspaceId, [...ids]);
+        this.workspace.recommendations = asArray(this.workspace.recommendations).filter(
+          (item) => !ids.has(item.requirement_id),
+        );
+        this.error = "";
       } catch (error) {
         this.error = error.message;
         throw error;
@@ -279,71 +512,24 @@ export const useWorkspaceStore = defineStore("workspace", {
         this.loading = false;
       }
     },
+
     async confirmAssignments(actions) {
       this.loading = true;
       try {
-        this.applyWorkspace(await apiClient.confirmAssignments(this.workspaceId, actions));
-      } catch (error) {
-        this.error = error.message;
-        throw error;
-      } finally {
-        this.loading = false;
-      }
-    },
-    async uploadModuleKnowledge(file) {
-      this.loading = true;
-      try {
-        this.applyWorkspace(await apiClient.uploadModuleKnowledge(this.workspaceId, file));
-      } catch (error) {
-        this.error = error.message;
-        throw error;
-      } finally {
-        this.loading = false;
-      }
-    },
-    async syncPlatformExports(storyFile, taskFile) {
-      this.loading = true;
-      try {
-        this.applyWorkspace(await apiClient.syncPlatformExports(this.workspaceId, storyFile, taskFile));
-      } catch (error) {
-        this.error = error.message;
-        throw error;
-      } finally {
-        this.loading = false;
-      }
-    },
-    async uploadStoryOnly(storyFile) {
-      this.loading = true;
-      try {
-        this.applyWorkspace(await apiClient.uploadStoryOnly(this.workspaceId, storyFile));
-      } catch (error) {
-        this.error = error.message;
-        throw error;
-      } finally {
-        this.loading = false;
-      }
-    },
-    async uploadTaskOnly(taskFile) {
-      this.loading = true;
-      try {
-        this.applyWorkspace(await apiClient.uploadTaskOnly(this.workspaceId, taskFile));
-      } catch (error) {
-        this.error = error.message;
-        throw error;
-      } finally {
-        this.loading = false;
-      }
-    },
-    async loadTasks(query = {}) {
-      this.loading = true;
-      try {
-        const payload = await apiClient.getTasks(this.workspaceId, query);
-        this.taskPagination = {
-          items: payload.items || [],
-          page: payload.page || 1,
-          page_size: payload.page_size || 20,
-          total: payload.total || 0,
-          total_pages: payload.total_pages || 0,
+        const payload = await apiClient.confirmAssignments(this.workspaceId, actions);
+        const confirmed = asArray(payload.confirmed_assignments).map(normalizeRecommendation);
+        const acceptedIds = Object.entries(actions || {})
+          .filter(([, action]) => String(action?.action || "").toLowerCase() === "accept")
+          .map(([requirementId]) => requirementId);
+        const acceptedIdSet = new Set(acceptedIds);
+        this.workspace.confirmed_assignments = confirmed;
+        this.workspace.recommendations = asArray(this.workspace.recommendations).filter(
+          (item) => !acceptedIdSet.has(item.requirement_id),
+        );
+        this.workspace.latest_knowledge_update = {
+          status: "skipped",
+          has_module_diff_records: false,
+          reply: "当前版本未执行知识更新分析。",
         };
         this.error = "";
       } catch (error) {
@@ -353,6 +539,93 @@ export const useWorkspaceStore = defineStore("workspace", {
         this.loading = false;
       }
     },
+
+    async uploadModuleKnowledge(file) {
+      this.loading = true;
+      try {
+        const payload = await apiClient.uploadModuleKnowledge(this.workspaceId, file);
+        this.workspace.knowledge_base_summary = {
+          entry_count: Number(payload.imported_count || payload.success_rows || 0),
+          sample_keys: asArray(payload.sample_keys),
+        };
+        this.workspace.uploads = [...asArray(this.workspace.uploads), payload];
+        this.error = "";
+      } catch (error) {
+        this.error = error.message;
+        throw error;
+      } finally {
+        this.loading = false;
+      }
+    },
+
+    async syncPlatformExports(storyFile, taskFile) {
+      this.loading = true;
+      try {
+        const payload = await apiClient.syncPlatformExports(this.workspaceId, storyFile, taskFile);
+        this.workspace.latest_sync_batch = payload;
+        this.workspace.uploads = [...asArray(this.workspace.uploads), payload];
+        this.error = "";
+      } catch (error) {
+        this.error = error.message;
+        throw error;
+      } finally {
+        this.loading = false;
+      }
+    },
+
+    async uploadStoryOnly(storyFile) {
+      this.loading = true;
+      try {
+        const payload = await apiClient.uploadStoryOnly(this.workspaceId, storyFile);
+        this.workspace.latest_story_import = payload;
+        this.workspace.uploads = [...asArray(this.workspace.uploads), payload];
+        this.error = "";
+      } catch (error) {
+        this.error = error.message;
+        throw error;
+      } finally {
+        this.loading = false;
+      }
+    },
+
+    async uploadTaskOnly(taskFile) {
+      this.loading = true;
+      try {
+        const payload = await apiClient.uploadTaskOnly(this.workspaceId, taskFile);
+        this.workspace.latest_task_import = payload;
+        this.workspace.uploads = [...asArray(this.workspace.uploads), payload];
+        this.error = "";
+      } catch (error) {
+        this.error = error.message;
+        throw error;
+      } finally {
+        this.loading = false;
+      }
+    },
+
+    async loadTasks(query = {}) {
+      this.loading = true;
+      try {
+        const payload = await apiClient.getTasks(this.workspaceId, query);
+        const page = toPositiveInt(payload.page, 1);
+        const pageSize = toPositiveInt(payload.page_size, 20);
+        const total = Number(payload.total || 0);
+        this.taskPagination = {
+          items: asArray(payload.items),
+          page,
+          page_size: pageSize,
+          total,
+          total_pages: toTotalPages(total, pageSize),
+        };
+        this.error = "";
+      } catch (error) {
+        this.error = error.message;
+        throw error;
+      } finally {
+        this.loading = false;
+      }
+    },
+
     async loadStories(page = 1, keyword = "") {
       this.loading = true;
       try {
@@ -362,12 +635,15 @@ export const useWorkspaceStore = defineStore("workspace", {
           this.storyPagination.page_size,
           keyword || undefined,
         );
+        const pageNo = toPositiveInt(payload.page, 1);
+        const pageSize = toPositiveInt(payload.page_size, 20);
+        const total = Number(payload.total || 0);
         this.storyPagination = {
-          items: payload.items || [],
-          page: payload.page || 1,
-          page_size: payload.page_size || 20,
-          total: payload.total || 0,
-          total_pages: payload.total_pages || 0,
+          items: asArray(payload.items),
+          page: pageNo,
+          page_size: pageSize,
+          total,
+          total_pages: toTotalPages(total, pageSize),
           keyword: keyword || "",
         };
         this.error = "";
@@ -378,11 +654,12 @@ export const useWorkspaceStore = defineStore("workspace", {
         this.loading = false;
       }
     },
+
     async refreshMonitoring() {
       this.loading = true;
       try {
         const payload = await apiClient.getMonitoring(this.workspaceId);
-        this.monitoring = payload.alerts || [];
+        this.monitoring = asArray(payload.alerts);
         this.error = "";
       } catch (error) {
         this.error = error.message;
@@ -391,11 +668,16 @@ export const useWorkspaceStore = defineStore("workspace", {
         this.loading = false;
       }
     },
+
     async refreshInsights() {
       this.loading = true;
       try {
         const payload = await apiClient.getInsights(this.workspaceId);
-        this.insights = payload.insights || this.insights;
+        this.insights = {
+          heatmap: asArray(payload.heatmap),
+          single_points: asArray(payload.single_points),
+          growth_suggestions: asArray(payload.growth_suggestions),
+        };
         this.insightSummary = payload.summary || null;
         this.error = "";
       } catch (error) {
@@ -405,15 +687,17 @@ export const useWorkspaceStore = defineStore("workspace", {
         this.loading = false;
       }
     },
+
     async loadInsightHistory() {
       try {
         const payload = await apiClient.getInsightHistory(this.workspaceId);
-        this.insightHistory = payload.history || [];
+        this.insightHistory = asArray(payload.items);
       } catch (error) {
         this.error = error.message;
         throw error;
       }
     },
+
     async loadConfirmationHistory(page = 1) {
       this.loading = true;
       try {
@@ -422,12 +706,15 @@ export const useWorkspaceStore = defineStore("workspace", {
           page,
           this.confirmationHistory.page_size,
         );
+        const pageNo = toPositiveInt(payload.page, 1);
+        const pageSize = toPositiveInt(payload.page_size, 20);
+        const total = Number(payload.total || 0);
         this.confirmationHistory = {
-          items: payload.items || [],
-          page: payload.page || 1,
-          page_size: payload.page_size || 20,
-          total: payload.total || 0,
-          total_pages: payload.total_pages || 0,
+          items: asArray(payload.items).map(normalizeConfirmationItem),
+          page: pageNo,
+          page_size: pageSize,
+          total,
+          total_pages: toTotalPages(total, pageSize),
         };
         this.error = "";
       } catch (error) {
@@ -437,6 +724,7 @@ export const useWorkspaceStore = defineStore("workspace", {
         this.loading = false;
       }
     },
+
     async loadKnowledgeUpdateModuleDiffs(sessionId, requirementId, { force = false } = {}) {
       const cacheKey = `${sessionId}::${requirementId}`;
       const current = this.knowledgeUpdateModuleDiffs[cacheKey];
@@ -460,13 +748,13 @@ export const useWorkspaceStore = defineStore("workspace", {
         this.knowledgeUpdateModuleDiffs = {
           ...this.knowledgeUpdateModuleDiffs,
           [cacheKey]: {
-            items: payload.items || [],
+            items: asArray(payload.items),
             loading: false,
             loaded: true,
           },
         };
         this.error = "";
-        return payload.items || [];
+        return asArray(payload.items);
       } catch (error) {
         this.knowledgeUpdateModuleDiffs = {
           ...this.knowledgeUpdateModuleDiffs,
@@ -480,11 +768,23 @@ export const useWorkspaceStore = defineStore("workspace", {
         throw error;
       }
     },
+
     async sendChatMessage(message) {
       this.loading = true;
       try {
-        const result = await apiClient.sendChatMessage(this.workspaceId, message);
-        this.applyWorkspace(result);
+        const result = await apiClient.sendChatMessage(this.workspaceId, message, this.activeSessionId || null);
+        const messages = asArray(result.messages).map((item) => ({
+          ...item,
+          parsed_requirements: asArray(item.parsed_requirements),
+        }));
+        this.activeSessionId = result.session_id || this.activeSessionId;
+        this.workspace.active_session_id = this.activeSessionId;
+        this.workspace.draft = {
+          ...this.workspace.draft,
+          chat_messages: messages,
+        };
+        this.workspace.requirements = inferRequirementsFromMessages(messages);
+        await this.loadSessions();
         this.error = "";
         return result;
       } catch (error) {
@@ -494,12 +794,16 @@ export const useWorkspaceStore = defineStore("workspace", {
         this.loading = false;
       }
     },
+
     async createNewSession() {
       this.loading = true;
       try {
         const result = await apiClient.createChatSession(this.workspaceId);
-        this.activeSessionId = result.session_id;
-        this.session_list = (result.session_list || this.session_list);
+        this.activeSessionId = result.session_id || "";
+        this.workspace.active_session_id = this.activeSessionId;
+        this.workspace.draft.chat_messages = [];
+        this.workspace.requirements = [];
+        await this.loadSessions();
         this.error = "";
         return result;
       } catch (error) {
@@ -509,13 +813,19 @@ export const useWorkspaceStore = defineStore("workspace", {
         this.loading = false;
       }
     },
+
     async switchSession(sessionId) {
       this.loading = true;
       try {
         const result = await apiClient.getChatSession(this.workspaceId, sessionId);
-        // Update workspace draft with the session's messages
-        this.workspace.draft.chat_messages = result.messages || [];
+        const messages = asArray(result.messages).map((item) => ({
+          ...item,
+          parsed_requirements: asArray(item.parsed_requirements),
+        }));
+        this.workspace.draft.chat_messages = messages;
+        this.workspace.requirements = inferRequirementsFromMessages(messages);
         this.activeSessionId = sessionId;
+        this.workspace.active_session_id = sessionId;
         this.error = "";
         return result;
       } catch (error) {
@@ -525,29 +835,37 @@ export const useWorkspaceStore = defineStore("workspace", {
         this.loading = false;
       }
     },
+
     async loadSessions() {
       try {
         const result = await apiClient.listChatSessions(this.workspaceId);
-        this.session_list = result.sessions || [];
+        this.session_list = asArray(result.sessions);
         this.activeSessionId = result.active_session_id || this.activeSessionId;
-        // Do not load active session messages — always show empty "new conversation" on page load
-        this.workspace.draft.chat_messages = [];
+        this.workspace.active_session_id = this.activeSessionId;
+        this.workspace.session_list = this.session_list;
         this.error = "";
       } catch (error) {
         this.error = error.message;
         throw error;
       }
     },
+
     async deleteSession(sessionId) {
       this.loading = true;
       try {
         const result = await apiClient.deleteChatSession(this.workspaceId, sessionId);
-        // Update active session and messages if the deleted one was active
         this.activeSessionId = result.active_session_id || "";
-        this.workspace.draft.chat_messages = result.messages || [];
-        // Reload session list
+        this.workspace.active_session_id = this.activeSessionId;
         const sessionsResult = await apiClient.listChatSessions(this.workspaceId);
-        this.session_list = sessionsResult.sessions || [];
+        this.session_list = asArray(sessionsResult.sessions);
+        if (this.activeSessionId) {
+          const active = await apiClient.getChatSession(this.workspaceId, this.activeSessionId);
+          this.workspace.draft.chat_messages = asArray(active.messages);
+          this.workspace.requirements = inferRequirementsFromMessages(active.messages);
+        } else {
+          this.workspace.draft.chat_messages = [];
+          this.workspace.requirements = [];
+        }
         this.error = "";
       } catch (error) {
         this.error = error.message;
@@ -555,6 +873,60 @@ export const useWorkspaceStore = defineStore("workspace", {
       } finally {
         this.loading = false;
       }
+    },
+
+    async startPipeline(message = "") {
+      this.loading = true;
+      try {
+        const result = await apiClient.startPipeline(this.workspaceId, message);
+        this.pipelineState = normalizePipelineState(result);
+        this.error = "";
+        return this.pipelineState;
+      } catch (error) {
+        this.error = error.message;
+        throw error;
+      } finally {
+        this.loading = false;
+      }
+    },
+
+    async loadPipelineState() {
+      this.loading = true;
+      try {
+        const result = await apiClient.getPipelineState(this.workspaceId);
+        this.pipelineState = normalizePipelineState(result);
+        this.error = "";
+        return this.pipelineState;
+      } catch (error) {
+        this.pipelineState = null;
+        this.error = "";
+        return null;
+      } finally {
+        this.loading = false;
+      }
+    },
+
+    async confirmPipelineStep(action, options = {}) {
+      this.loading = true;
+      try {
+        const result = await apiClient.confirmPipelineStep(this.workspaceId, action, options);
+        this.pipelineState = normalizePipelineState(result);
+        this.error = "";
+        return this.pipelineState;
+      } catch (error) {
+        this.error = error.message;
+        throw error;
+      } finally {
+        this.loading = false;
+      }
+    },
+  },
+  getters: {
+    pipelineActive(state) {
+      return state.pipelineState
+        && state.pipelineState.status !== "complete"
+        && state.pipelineState.status !== "cancelled"
+        && !state.pipelineState.is_complete;
     },
   },
 });

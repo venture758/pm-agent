@@ -48,3 +48,9 @@ NVIDIA_NIM_DEFAULT_MODEL = "z-ai/glm4.7"
 NVIDIA_NIM_DEFAULT_TEMPERATURE = 0.3
 NVIDIA_NIM_DEFAULT_MAX_TOKENS = 20000
 NVIDIA_NIM_API_KEY_ENV = "NVIDIA_NIM_API_KEY"
+
+# 优先级枚举，用于降级循环（默认值，实际由 pm_agent.toml 配置）
+MODEL_TIERS = ["primary", "fallback", "last_resort"]
+
+# 模型配置默认值（空，由运行时从 pm_agent.toml 加载覆盖）
+MODEL_CONFIG: dict[str, dict[str, Any]] = {}

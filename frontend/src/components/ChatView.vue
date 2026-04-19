@@ -23,7 +23,7 @@ const props = defineProps({
   },
 });
 
-const emit = defineEmits(["send", "generate"]);
+const emit = defineEmits(["send", "generate", "start-pipeline"]);
 
 const scrollbarRef = ref(null);
 const showWelcome = ref(props.messages.length === 0);
@@ -81,6 +81,7 @@ watch(
           :can-generate="canGenerate"
           :generating="generating"
           @generate="emit('generate')"
+          @start-pipeline="emit('start-pipeline')"
         />
         <div v-if="loading" class="message-bubble is-assistant">
           <div class="bubble-content is-assistant">

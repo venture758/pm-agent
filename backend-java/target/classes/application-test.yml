@@ -1,0 +1,20 @@
+spring:
+  datasource:
+    url: ${PM_AGENT_DATABASE_URL:jdbc:mysql://127.0.0.1:3306/pm_agent_test?useUnicode=true&characterEncoding=UTF-8&serverTimezone=Asia/Shanghai}
+    username: ${PM_AGENT_DATABASE_USERNAME:root}
+    password: ${PM_AGENT_DATABASE_PASSWORD:}
+
+pm-agent:
+  llm:
+    primary:
+      base-url: ${PM_AGENT_LLM_PRIMARY_BASE_URL:http://localhost:18080/mock-llm}
+      model: ${PM_AGENT_LLM_PRIMARY_MODEL:test-model}
+      api-key: ${PM_AGENT_LLM_PRIMARY_API_KEY:test-key}
+      timeout-seconds: ${PM_AGENT_LLM_PRIMARY_TIMEOUT_SECONDS:5}
+      retry-times: ${PM_AGENT_LLM_PRIMARY_RETRY_TIMES:0}
+    fallback:
+      base-url: ${PM_AGENT_LLM_FALLBACK_BASE_URL:http://localhost:18080/mock-llm}
+      model: ${PM_AGENT_LLM_FALLBACK_MODEL:test-model}
+      api-key: ${PM_AGENT_LLM_FALLBACK_API_KEY:test-key}
+      timeout-seconds: ${PM_AGENT_LLM_FALLBACK_TIMEOUT_SECONDS:5}
+      retry-times: ${PM_AGENT_LLM_FALLBACK_RETRY_TIMES:0}
