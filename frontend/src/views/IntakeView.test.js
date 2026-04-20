@@ -59,4 +59,46 @@ describe("IntakeView", () => {
       params: { workspaceId: "default" },
     });
   });
+
+  it("shows needs-confirmation module hints for parsed requirements", () => {
+    const store = useWorkspaceStore();
+    store.workspace.draft = {
+      draft_mode: "chat",
+      message_text: "",
+      chat_messages: [
+        {
+          role: "assistant",
+          content: "已解析需求",
+          parsed_requirements: [
+            {
+              requirement_id: "R-2",
+              title: "发票异常回滚逻辑补齐",
+              priority: "中",
+              big_module: "税务",
+              function_module: "发票接口",
+              abstract_summary: "补齐发票异常回滚场景的幂等处理",
+              match_status: "needs_confirmation",
+              match_evidence: ["命中关键词: 回滚"],
+              candidate_modules: [
+                {
+                  big_module: "税务",
+                  function_module: "发票接口",
+                  reason: "历史任务名称关联",
+                },
+              ],
+            },
+          ],
+        },
+      ],
+      team_rows: [],
+      requirement_rows: [],
+    };
+    store.workspace.requirements = [{ requirement_id: "R-2", title: "发票异常回滚逻辑补齐" }];
+
+    const wrapper = mount(IntakeView);
+    const text = wrapper.text();
+    expect(text).toContain("待确认模块归属");
+    expect(text).toContain("候选模块");
+    expect(text).toContain("补齐发票异常回滚场景的幂等处理");
+  });
 });

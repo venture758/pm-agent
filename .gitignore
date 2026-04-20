@@ -3,3 +3,4 @@
 /.pm_agent_store/
 /.playwright-mcp/
 /.pm_agent_store/
+/backend-java/target/

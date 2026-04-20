@@ -29,6 +29,32 @@ function priorityType(type) {
   const map = { 高: "danger", 中: "warning", 低: "info" };
   return map[type] || "info";
 }
+
+function asArray(value) {
+  return Array.isArray(value) ? value : [];
+}
+
+function moduleLabel(req) {
+  const bigModule = String(req?.big_module || "").trim();
+  const functionModule = String(req?.function_module || "").trim();
+  if (!bigModule || !functionModule) {
+    return "";
+  }
+  return `${bigModule} / ${functionModule}`;
+}
+
+function isNeedsConfirmation(req) {
+  return String(req?.match_status || "").toLowerCase() === "needs_confirmation";
+}
+
+function candidateLabel(candidate) {
+  const bigModule = String(candidate?.big_module || "").trim();
+  const functionModule = String(candidate?.function_module || "").trim();
+  if (!bigModule || !functionModule) {
+    return "";
+  }
+  return `${bigModule} / ${functionModule}`;
+}
 </script>
 
 <template>
@@ -63,7 +89,16 @@ function priorityType(type) {
               <ElTag v-if="req.complexity" size="small" type="info">
                 复杂度: {{ req.complexity }}
               </ElTag>
+              <ElTag v-if="moduleLabel(req)" size="small" type="success">
+                模块: {{ moduleLabel(req) }}
+              </ElTag>
+              <ElTag v-if="isNeedsConfirmation(req)" size="small" type="danger" effect="dark">
+                待确认模块归属
+              </ElTag>
             </div>
+            <p v-if="req.abstract_summary" class="req-abstract">
+              {{ req.abstract_summary }}
+            </p>
             <div v-if="req.skills?.length" class="req-skills">
               <ElTag v-for="skill in req.skills" :key="skill" size="small" effect="plain">
                 {{ skill }}
@@ -75,6 +110,23 @@ function priorityType(type) {
             </div>
             <div v-if="req.blockers?.length" class="req-blockers">
               <span v-for="b in req.blockers" :key="b" class="blocker">⚠ {{ b }}</span>
+            </div>
+            <div v-if="asArray(req.match_evidence).length" class="req-evidence">
+              <span class="muted">匹配依据: </span>
+              <span v-for="evidence in asArray(req.match_evidence)" :key="evidence" class="evidence-tag">
+                {{ evidence }}
+              </span>
+            </div>
+            <div v-if="isNeedsConfirmation(req) && asArray(req.candidate_modules).length" class="req-candidates">
+              <span class="muted">候选模块: </span>
+              <span
+                v-for="candidate in asArray(req.candidate_modules)"
+                :key="`${candidate.big_module || ''}::${candidate.function_module || ''}`"
+                class="candidate-tag"
+              >
+                {{ candidateLabel(candidate) || "未命名候选模块" }}
+                <span v-if="candidate.reason" class="candidate-reason">（{{ candidate.reason }}）</span>
+              </span>
             </div>
           </div>
         </div>
@@ -169,11 +221,19 @@ function priorityType(type) {
 .req-meta,
 .req-skills,
 .req-modules,
-.req-blockers {
+.req-blockers,
+.req-evidence,
+.req-candidates {
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
   margin-top: 4px;
+}
+.req-abstract {
+  margin: 6px 0 2px;
+  font-size: 12px;
+  color: #475569;
+  line-height: 1.5;
 }
 .module-tag {
   font-size: 12px;
@@ -186,6 +246,25 @@ function priorityType(type) {
 .blocker {
   font-size: 12px;
   color: #e6a23c;
+}
+.evidence-tag {
+  font-size: 12px;
+  color: #334155;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 999px;
+  padding: 0 8px;
+}
+.candidate-tag {
+  font-size: 12px;
+  color: #1e3a8a;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  border-radius: 999px;
+  padding: 0 8px;
+}
+.candidate-reason {
+  color: #64748b;
 }
 .bubble-time {
   font-size: 11px;

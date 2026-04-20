@@ -24,6 +24,7 @@
 /Users/liwenqiang/IdeaProjects/pm-agent/backend-java/src/main/java/com/pmagent/backend/api/web/GlobalExceptionHandler.java
 /Users/liwenqiang/IdeaProjects/pm-agent/backend-java/src/main/java/com/pmagent/backend/api/web/RequestLoggingFilter.java
 /Users/liwenqiang/IdeaProjects/pm-agent/backend-java/src/main/java/com/pmagent/backend/application/chat/ChatService.java
+/Users/liwenqiang/IdeaProjects/pm-agent/backend-java/src/main/java/com/pmagent/backend/application/chat/RequirementParseContextBuilder.java
 /Users/liwenqiang/IdeaProjects/pm-agent/backend-java/src/main/java/com/pmagent/backend/application/config/LlmProviderProperties.java
 /Users/liwenqiang/IdeaProjects/pm-agent/backend-java/src/main/java/com/pmagent/backend/application/confirmation/WorkspaceConfirmationService.java
 /Users/liwenqiang/IdeaProjects/pm-agent/backend-java/src/main/java/com/pmagent/backend/application/delivery/DeliveryService.java

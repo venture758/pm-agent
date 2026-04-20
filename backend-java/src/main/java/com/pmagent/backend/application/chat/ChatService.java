@@ -6,8 +6,11 @@ import com.pmagent.backend.infrastructure.entity.ChatMessageEntity;
 import com.pmagent.backend.infrastructure.entity.ChatSessionEntity;
 import com.pmagent.backend.infrastructure.mapper.ChatMessageMapper;
 import com.pmagent.backend.infrastructure.mapper.ChatSessionMapper;
+import com.pmagent.backend.infrastructure.mapper.ModuleEntryMapper;
 import com.pmagent.backend.infrastructure.mapper.RequirementWriteMapper;
 import com.pmagent.backend.infrastructure.mapper.SessionRequirementMapper;
+import com.pmagent.backend.infrastructure.mapper.StoryRecordMapper;
+import com.pmagent.backend.infrastructure.mapper.TaskRecordMapper;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -24,6 +27,10 @@ public class ChatService {
     private final ChatMessageMapper chatMessageMapper;
     private final RequirementWriteMapper requirementWriteMapper;
     private final SessionRequirementMapper sessionRequirementMapper;
+    private final ModuleEntryMapper moduleEntryMapper;
+    private final TaskRecordMapper taskRecordMapper;
+    private final StoryRecordMapper storyRecordMapper;
+    private final RequirementParseContextBuilder requirementParseContextBuilder;
     private final LlmService llmService;
     private final ObjectMapper objectMapper;
 
@@ -31,12 +38,20 @@ public class ChatService {
                        ChatMessageMapper chatMessageMapper,
                        RequirementWriteMapper requirementWriteMapper,
                        SessionRequirementMapper sessionRequirementMapper,
+                       ModuleEntryMapper moduleEntryMapper,
+                       TaskRecordMapper taskRecordMapper,
+                       StoryRecordMapper storyRecordMapper,
+                       RequirementParseContextBuilder requirementParseContextBuilder,
                        LlmService llmService,
                        ObjectMapper objectMapper) {
         this.chatSessionMapper = chatSessionMapper;
         this.chatMessageMapper = chatMessageMapper;
         this.requirementWriteMapper = requirementWriteMapper;
         this.sessionRequirementMapper = sessionRequirementMapper;
+        this.moduleEntryMapper = moduleEntryMapper;
+        this.taskRecordMapper = taskRecordMapper;
+        this.storyRecordMapper = storyRecordMapper;
+        this.requirementParseContextBuilder = requirementParseContextBuilder;
         this.llmService = llmService;
         this.objectMapper = objectMapper;
     }
@@ -59,7 +74,12 @@ public class ChatService {
 
         String now = Instant.now().toString();
         appendMessage(workspaceId, sessionId, "user", message, "");
-        Map<String, Object> parsed = llmService.parseRequirements(message);
+        Map<String, Object> parseContext = requirementParseContextBuilder.build(
+            moduleEntryMapper.listAllByWorkspaceId(workspaceId),
+            taskRecordMapper.listAllByWorkspace(workspaceId),
+            storyRecordMapper.listAllByWorkspace(workspaceId)
+        );
+        Map<String, Object> parsed = llmService.parseRequirements(message, parseContext);
         String reply = String.valueOf(parsed.getOrDefault("reply", "已收到需求"));
         @SuppressWarnings("unchecked")
         List<Map<String, Object>> requirements = (List<Map<String, Object>>) parsed.getOrDefault("requirements", List.of());

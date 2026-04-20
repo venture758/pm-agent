@@ -16,6 +16,7 @@ com/pmagent/backend/api/controller/WorkspaceInsightController.class
 com/pmagent/backend/api/controller/WorkspaceDraftController.class
 com/pmagent/backend/application/pipeline/PipelineService.class
 com/pmagent/backend/infrastructure/entity/RecommendationEntity.class
+com/pmagent/backend/application/chat/RequirementParseContextBuilder.class
 com/pmagent/backend/infrastructure/mapper/ManagedMemberMapper.class
 com/pmagent/backend/PmAgentBackendApplication.class
 com/pmagent/backend/api/package-info.class

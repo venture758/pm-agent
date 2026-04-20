@@ -59,4 +59,12 @@ public interface StoryRecordMapper {
                                             @Param("keyword") String keyword,
                                             @Param("offset") int offset,
                                             @Param("pageSize") int pageSize);
+
+    @Select("""
+        SELECT workspace_id, user_story_code, user_story_name, status, owner_names, tester_names, priority, detail_url, project_name, developer_names, imported_at, updated_at
+        FROM workspace_story_records
+        WHERE workspace_id = #{workspaceId}
+        ORDER BY id DESC
+        """)
+    List<StoryRecordEntity> listAllByWorkspace(@Param("workspaceId") String workspaceId);
 }
