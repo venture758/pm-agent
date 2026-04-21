@@ -1,7 +1,6 @@
 package com.pmagent.backend.application.chat;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.pmagent.backend.application.config.LlmProviderProperties;
 import com.pmagent.backend.application.llm.LlmService;
 import com.pmagent.backend.application.retrieval.HybridRetriever;
 import com.pmagent.backend.infrastructure.entity.ChatMessageEntity;
@@ -46,7 +45,6 @@ public class ChatService {
                        StoryRecordMapper storyRecordMapper,
                        RequirementParseContextBuilder requirementParseContextBuilder,
                        HybridRetriever hybridRetriever,
-                       LlmProviderProperties llmProviderProperties,
                        LlmService llmService,
                        ObjectMapper objectMapper) {
         this.chatSessionMapper = chatSessionMapper;
