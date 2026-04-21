@@ -1,5 +1,7 @@
 package com.pmagent.backend.application.config;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.pmagent.backend.infrastructure.llm.EmbeddingClient;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -9,9 +11,16 @@ import java.util.function.Supplier;
 public class RetrievalConfig {
 
     private final LlmProviderProperties llmProviderProperties;
+    private final ObjectMapper objectMapper;
 
-    public RetrievalConfig(LlmProviderProperties llmProviderProperties) {
+    public RetrievalConfig(LlmProviderProperties llmProviderProperties, ObjectMapper objectMapper) {
         this.llmProviderProperties = llmProviderProperties;
+        this.objectMapper = objectMapper;
+    }
+
+    @Bean
+    public EmbeddingClient embeddingClient() {
+        return new EmbeddingClient(objectMapper);
     }
 
     @Bean
