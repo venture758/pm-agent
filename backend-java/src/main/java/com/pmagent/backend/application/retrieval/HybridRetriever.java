@@ -43,12 +43,12 @@ public class HybridRetriever {
                                         List<StoryRecordEntity> storyRecords) {
 
         if (moduleEntries == null || moduleEntries.isEmpty()) {
-            return Map.of(
-                "module_candidates", List.of(),
-                "task_name_signals", List.of(),
-                "story_name_signals", List.of(),
-                "excluded_fields", List.of("module_path")
-            );
+            var result = new LinkedHashMap<String, Object>();
+            result.put("module_candidates", List.of());
+            result.put("task_name_signals", List.of());
+            result.put("story_name_signals", List.of());
+            result.put("excluded_fields", List.of("module_path"));
+            return result;
         }
 
         moduleIndexer.build(moduleEntries);
