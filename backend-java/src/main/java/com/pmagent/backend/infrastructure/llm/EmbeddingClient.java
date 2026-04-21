@@ -35,8 +35,13 @@ public class EmbeddingClient {
 
         if (baseUrl == null || baseUrl.isBlank() || model == null || model.isBlank()
                 || query == null || query.isBlank() || candidateTexts.isEmpty()) {
+            log.debug("embedAndRank skipped: baseUrl={}, model={}, queryLength={}, candidates={}",
+                baseUrl == null ? "null" : "(set)", model, query == null ? 0 : query.length(), candidateTexts.size());
             return List.of();
         }
+
+        log.info("embedAndRank start: model={}, queryLength={}, candidates={}",
+            model, query.length(), candidateTexts.size());
 
         try {
             List<String> allTexts = new ArrayList<>();
@@ -45,7 +50,8 @@ public class EmbeddingClient {
 
             List<double[]> embeddings = batchEmbed(baseUrl, apiKey, model, allTexts);
             if (embeddings == null || embeddings.size() != allTexts.size()) {
-                log.warn("Embedding API returned unexpected result");
+                log.warn("Embedding API returned unexpected result: expected={}, got={}",
+                    allTexts.size(), embeddings == null ? "null" : embeddings.size());
                 return List.of();
             }
 
@@ -61,10 +67,14 @@ public class EmbeddingClient {
 
             ranked.sort(Comparator.<Map<String, Object>>comparingDouble(
                 m -> (Double) m.get("embedding_score")).reversed());
+
+            log.info("embedAndRank done: topScore={}, top3Scores={}",
+                ranked.isEmpty() ? "N/A" : String.valueOf(ranked.get(0).get("embedding_score")),
+                ranked.stream().limit(3).map(m -> String.valueOf(m.get("embedding_score"))).toList());
             return ranked;
 
         } catch (Exception ex) {
-            log.warn("Embedding call failed: {}", ex.getMessage());
+            log.warn("Embedding call failed: model={}, error={}", model, ex.getMessage());
             return List.of();
         }
     }
