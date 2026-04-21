@@ -37,10 +37,15 @@ public class LlmService {
     public Map<String, Object> parseRequirements(String message, Map<String, Object> parseContext) {
         String contextJson = writeJson(parseContext == null ? Map.of() : parseContext);
         String prompt = """
-            你是需求解析助手。请仅返回 JSON，禁止 markdown。
-            你必须基于给定模块候选进行模块归属，不可发明新模块。
-            严禁使用 module_path 字段作为依据。
-            返回 JSON:
+            你是需求解析助手。请仅返回 JSON，禁止 markdown，禁止任何解释文字。
+
+            规则：
+            1. 你必须基于给定模块候选进行模块归属，不可发明新模块。
+            2. 严禁使用 module_path 字段作为依据。
+            3. 模块归属必须与 candidate_modules 中的某一个完全匹配。
+            4. 如果无法确定模块归属，将 match_status 设为 "needs_confirmation"。
+
+            返回 JSON 格式：
             {
               "reply": "给用户的简短回复（1-2句）",
               "requirements": [
@@ -60,13 +65,21 @@ public class LlmService {
                 }
               ]
             }
+
             用户消息：
             %s
 
             解析上下文(JSON)：
             %s
             """.formatted(message, contextJson);
-        String raw = chatWithFallback(prompt);
+
+        String raw;
+        try {
+            raw = chatWithJsonFormat(prompt);
+        } catch (LlmUnavailableException ex) {
+            // 降级为不带 response_format 的调用
+            raw = chatWithFallback(prompt);
+        }
         try {
             JsonNode node = objectMapper.readTree(normalizeJsonPayload(raw));
             String reply = node.path("reply").asText("已收到需求");
@@ -402,6 +415,22 @@ public class LlmService {
             return objectMapper.writeValueAsString(payload);
         } catch (Exception ex) {
             return "{}";
+        }
+    }
+
+    private String chatWithJsonFormat(String prompt) {
+        LlmProviderProperties.Tier tier = llmProviderProperties.getPrimary();
+        try {
+            return client.chatWithJsonFormat(
+                tier.getBaseUrl(), tier.getApiKey(), tier.getModel(),
+                tier.getTimeoutSeconds(), prompt
+            );
+        } catch (LlmUnavailableException ex) {
+            LlmProviderProperties.Tier fallback = llmProviderProperties.getFallback();
+            return client.chatWithJsonFormat(
+                fallback.getBaseUrl(), fallback.getApiKey(), fallback.getModel(),
+                fallback.getTimeoutSeconds(), prompt
+            );
         }
     }
 
