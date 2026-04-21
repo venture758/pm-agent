@@ -1,7 +1,9 @@
 package com.pmagent.backend.application.chat;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.pmagent.backend.application.config.LlmProviderProperties;
 import com.pmagent.backend.application.llm.LlmService;
+import com.pmagent.backend.application.retrieval.HybridRetriever;
 import com.pmagent.backend.infrastructure.entity.ChatMessageEntity;
 import com.pmagent.backend.infrastructure.entity.ChatSessionEntity;
 import com.pmagent.backend.infrastructure.mapper.ChatMessageMapper;
@@ -31,6 +33,7 @@ public class ChatService {
     private final TaskRecordMapper taskRecordMapper;
     private final StoryRecordMapper storyRecordMapper;
     private final RequirementParseContextBuilder requirementParseContextBuilder;
+    private final HybridRetriever hybridRetriever;
     private final LlmService llmService;
     private final ObjectMapper objectMapper;
 
@@ -42,6 +45,8 @@ public class ChatService {
                        TaskRecordMapper taskRecordMapper,
                        StoryRecordMapper storyRecordMapper,
                        RequirementParseContextBuilder requirementParseContextBuilder,
+                       HybridRetriever hybridRetriever,
+                       LlmProviderProperties llmProviderProperties,
                        LlmService llmService,
                        ObjectMapper objectMapper) {
         this.chatSessionMapper = chatSessionMapper;
@@ -52,6 +57,7 @@ public class ChatService {
         this.taskRecordMapper = taskRecordMapper;
         this.storyRecordMapper = storyRecordMapper;
         this.requirementParseContextBuilder = requirementParseContextBuilder;
+        this.hybridRetriever = hybridRetriever;
         this.llmService = llmService;
         this.objectMapper = objectMapper;
     }
@@ -74,11 +80,7 @@ public class ChatService {
 
         String now = Instant.now().toString();
         appendMessage(workspaceId, sessionId, "user", message, "");
-        Map<String, Object> parseContext = requirementParseContextBuilder.build(
-            moduleEntryMapper.listAllByWorkspaceId(workspaceId),
-            taskRecordMapper.listAllByWorkspace(workspaceId),
-            storyRecordMapper.listAllByWorkspace(workspaceId)
-        );
+        Map<String, Object> parseContext = buildByRetrieval(workspaceId, message);
         Map<String, Object> parsed = llmService.parseRequirements(message, parseContext);
         String reply = String.valueOf(parsed.getOrDefault("reply", "已收到需求"));
         @SuppressWarnings("unchecked")
@@ -103,6 +105,16 @@ public class ChatService {
         response.put("requirementIds", sessionRequirementMapper.listRequirementIds(sessionId));
         response.put("reply", reply);
         return response;
+    }
+
+    private Map<String, Object> buildByRetrieval(String workspaceId, String message) {
+        return hybridRetriever.retrieve(
+            workspaceId,
+            message,
+            moduleEntryMapper.listAllByWorkspaceId(workspaceId),
+            taskRecordMapper.listAllByWorkspace(workspaceId),
+            storyRecordMapper.listAllByWorkspace(workspaceId)
+        );
     }
 
     @Transactional
