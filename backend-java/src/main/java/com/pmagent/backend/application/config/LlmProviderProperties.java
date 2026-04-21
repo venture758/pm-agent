@@ -87,8 +87,11 @@ public class LlmProviderProperties {
     public static class Retrieval {
         private boolean embeddingEnabled = true;
         private String embeddingModel = "";
+        @Min(1)
         private int bm25TopN = 20;
+        @Min(1)
         private int retrievalTopK = 8;
+        @Min(1)
         private int bm25FallbackTopN = 5;
 
         public boolean isEmbeddingEnabled() {
