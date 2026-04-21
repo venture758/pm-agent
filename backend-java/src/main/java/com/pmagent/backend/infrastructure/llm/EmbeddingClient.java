@@ -30,7 +30,7 @@ public class EmbeddingClient {
      * @return sorted candidate list with embedding_score added, empty if API call fails
      */
     public List<Map<String, Object>> embedAndRank(
-            String baseUrl, String model, String query,
+            String baseUrl, String apiKey, String model, String query,
             List<String> candidateTexts) {
 
         if (baseUrl == null || baseUrl.isBlank() || model == null || model.isBlank()
@@ -43,7 +43,7 @@ public class EmbeddingClient {
             allTexts.add(query);
             allTexts.addAll(candidateTexts);
 
-            List<double[]> embeddings = batchEmbed(baseUrl, model, allTexts);
+            List<double[]> embeddings = batchEmbed(baseUrl, apiKey, model, allTexts);
             if (embeddings == null || embeddings.size() != allTexts.size()) {
                 log.warn("Embedding API returned unexpected result");
                 return List.of();
@@ -69,7 +69,7 @@ public class EmbeddingClient {
         }
     }
 
-    private List<double[]> batchEmbed(String baseUrl, String model, List<String> texts) throws Exception {
+    private List<double[]> batchEmbed(String baseUrl, String apiKey, String model, List<String> texts) throws Exception {
         String endpoint = baseUrl.endsWith("/") ? baseUrl + "embeddings" : baseUrl + "/embeddings";
         Map<String, Object> payload = Map.of(
             "model", model,
@@ -77,12 +77,17 @@ public class EmbeddingClient {
         );
         String body = objectMapper.writeValueAsString(payload);
 
-        HttpRequest request = HttpRequest.newBuilder()
+        var requestBuilder = HttpRequest.newBuilder()
             .uri(URI.create(endpoint))
             .timeout(Duration.ofSeconds(15))
             .header("Content-Type", "application/json")
-            .POST(HttpRequest.BodyPublishers.ofString(body))
-            .build();
+            .POST(HttpRequest.BodyPublishers.ofString(body));
+
+        if (apiKey != null && !apiKey.isBlank()) {
+            requestBuilder.header("Authorization", "Bearer " + apiKey);
+        }
+
+        HttpRequest request = requestBuilder.build();
 
         HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
         if (response.statusCode() >= 400) {

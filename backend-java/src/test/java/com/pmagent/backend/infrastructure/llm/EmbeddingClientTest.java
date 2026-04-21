@@ -16,7 +16,7 @@ class EmbeddingClientTest {
     @Test
     void shouldReturnEmptyWhenBaseUrlIsBlank() {
         List<Map<String, Object>> results = client.embedAndRank(
-            "", "text-embedding-3-small", "测试查询",
+            "", "", "text-embedding-3-small", "测试查询",
             List.of("候选1", "候选2")
         );
         assertTrue(results.isEmpty());
@@ -25,7 +25,7 @@ class EmbeddingClientTest {
     @Test
     void shouldReturnEmptyWhenModelIsBlank() {
         List<Map<String, Object>> results = client.embedAndRank(
-            "http://localhost:8080", "", "测试查询",
+            "http://localhost:8080", "", "", "测试查询",
             List.of("候选1", "候选2")
         );
         assertTrue(results.isEmpty());
@@ -34,7 +34,7 @@ class EmbeddingClientTest {
     @Test
     void shouldReturnEmptyWhenEmbeddingFails() {
         List<Map<String, Object>> results = client.embedAndRank(
-            "http://localhost:9999", "invalid-model", "测试查询",
+            "http://localhost:9999", "", "invalid-model", "测试查询",
             List.of("候选1", "候选2")
         );
         assertTrue(results.isEmpty());
