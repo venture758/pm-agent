@@ -24,7 +24,8 @@ public class WorkspacePipelineController {
     @PostMapping("/start")
     public ApiResponse<Map<String, Object>> start(@PathVariable String workspaceId, @RequestBody Map<String, Object> payload) {
         String message = String.valueOf(payload.getOrDefault("message", ""));
-        return ApiResponse.success(pipelineService.start(workspaceId, message));
+        String executionMode = String.valueOf(payload.getOrDefault("execution_mode", "auto"));
+        return ApiResponse.success(pipelineService.start(workspaceId, message, executionMode));
     }
 
     @GetMapping("/state")

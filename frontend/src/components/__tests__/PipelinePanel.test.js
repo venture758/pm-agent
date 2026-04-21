@@ -6,8 +6,11 @@ import PipelinePanel from "../PipelinePanel.vue";
 // Mock workspace store
 vi.mock("../../stores/workspace", () => ({
   useWorkspaceStore: () => ({
+    loading: false,
     confirmPipelineStep: vi.fn(async (action) => ({
-      status: action === "execute" ? "complete" : "success",
+      status: action === "execute" ? "complete" : "running",
+      run_status: action === "execute" ? "completed" : "running",
+      execution_mode: "manual",
       step_progress: [],
     })),
   }),
@@ -35,6 +38,10 @@ vi.mock("element-plus", async (originalImport) => {
 
 const mockPipelineState = {
   workspace_id: "default",
+  execution_mode: "manual",
+  run_status: "awaiting_confirmation",
+  awaiting_confirmation: false,
+  blocking_reason: "",
   current_step: "requirement_parsing",
   current_step_index: 0,
   is_complete: false,
@@ -238,14 +245,24 @@ describe("PipelinePanel", () => {
     expect(confirmBtn.text()).toBe("执行变更");
   });
 
-  it("shows loading bar when workspace store is loading", () => {
-    // Loading is controlled by workspaceStore.loading, not internal state.
-    // When no step_results exist for current step, data still shows.
+  it("shows loading bar while auto pipeline is running", () => {
     const wrapper = createWrapper({
-      step_results: {},
+      execution_mode: "auto",
+      run_status: "running",
     });
-    // Data still shows because pipelineState has requirements
-    expect(wrapper.find(".requirements-table").exists()).toBe(true);
+    expect(wrapper.find(".loading-bar").exists()).toBe(true);
+    expect(wrapper.findAll(".action-btn")).toHaveLength(0);
+  });
+
+  it("shows blocking reason and resume action when auto pipeline pauses", () => {
+    const wrapper = createWrapper({
+      execution_mode: "auto",
+      run_status: "awaiting_confirmation",
+      awaiting_confirmation: true,
+      blocking_reason: "需求解析存在待确认模块归属",
+    });
+    expect(wrapper.text()).toContain("需求解析存在待确认模块归属");
+    expect(wrapper.find(".btn-confirm").text()).toBe("继续自动执行");
   });
 
   it("emits close event when close button clicked", async () => {

@@ -23,6 +23,7 @@ const sidebarCollapsed = ref(false);
 const sidebarOpenMobile = ref(false);
 const isNarrowScreen = ref(false);
 const pipelineDrawerOpen = ref(false);
+const lastHandledCompletedRunId = ref("");
 
 async function handleSendMessage(text) {
   try {
@@ -89,13 +90,11 @@ function checkScreenSize() {
   }
 }
 
-async function handleStartPipeline() {
+async function handleStartPipeline(executionMode = "auto") {
   try {
-    const result = await workspaceStore.startPipeline("");
-    if (result?.current_step) {
-      if (isNarrowScreen.value) {
-        pipelineDrawerOpen.value = true;
-      }
+    const result = await workspaceStore.startPipeline("", executionMode);
+    if (result) {
+      pipelineDrawerOpen.value = isNarrowScreen.value;
     }
   } catch {
     // error handled by store
@@ -103,14 +102,13 @@ async function handleStartPipeline() {
 }
 
 async function handlePipelineComplete() {
-  workspaceStore.pipelineState = null;
-  pipelineDrawerOpen.value = false;
   ElMessage.success("Pipeline 分析完成，正在刷新数据");
   await workspaceStore.loadWorkspace(workspaceId.value);
 }
 
 function handlePipelineClose() {
   workspaceStore.pipelineState = null;
+  workspaceStore.syncPipelinePolling();
   pipelineDrawerOpen.value = false;
 }
 
@@ -135,6 +133,25 @@ watch(
       workspaceStore.loadSessions().catch(() => {});
     }
   },
+);
+
+watch(
+  pipelineState,
+  async (state) => {
+    if (!state) {
+      lastHandledCompletedRunId.value = "";
+      return;
+    }
+    if (state.is_complete && state.run_id && state.run_id !== lastHandledCompletedRunId.value) {
+      lastHandledCompletedRunId.value = state.run_id;
+      await handlePipelineComplete();
+      return;
+    }
+    if (state && isNarrowScreen.value && workspaceStore.pipelineActive) {
+      pipelineDrawerOpen.value = true;
+    }
+  },
+  { deep: true },
 );
 </script>
 

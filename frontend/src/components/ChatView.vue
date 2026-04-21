@@ -81,7 +81,7 @@ watch(
           :can-generate="canGenerate"
           :generating="generating"
           @generate="emit('generate')"
-          @start-pipeline="emit('start-pipeline')"
+          @start-pipeline="(mode) => emit('start-pipeline', mode)"
         />
         <div v-if="loading" class="message-bubble is-assistant">
           <div class="bubble-content is-assistant">

@@ -271,10 +271,13 @@ export const apiClient = {
   },
 
   // Pipeline API
-  startPipeline(workspaceId, message = "") {
+  startPipeline(workspaceId, message = "", executionMode = "auto") {
     return request(`${API_PREFIX}/workspaces/${workspaceId}/pipeline/start`, {
       method: "POST",
-      body: JSON.stringify({ message }),
+      body: JSON.stringify({
+        message,
+        execution_mode: executionMode,
+      }),
     });
   },
   getPipelineState(workspaceId) {

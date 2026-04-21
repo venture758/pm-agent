@@ -22,19 +22,33 @@ const STEP_ICONS = {
   pending: "·",
 };
 
-const currentStepKey = computed(() => props.pipelineState?.current_step);
+const currentStepKey = computed(() => props.pipelineState?.current_step || props.pipelineState?.display_step || "");
 const isLastStep = computed(() => {
   const ps = props.pipelineState;
   if (!ps) return false;
   return ps.current_step_index >= ps.step_progress.length - 1;
 });
-const isLoading = computed(() => workspaceStore.loading);
+const isLoading = computed(() => {
+  const runStatus = props.pipelineState?.run_status;
+  return workspaceStore.loading || runStatus === "queued" || runStatus === "running";
+});
+const showHumanActions = computed(() => {
+  const ps = props.pipelineState;
+  if (!ps || !currentStepKey.value || isLoading.value || ps.is_complete || ps.run_status === "failed") {
+    return false;
+  }
+  return ps.execution_mode === "manual" || ps.awaiting_confirmation;
+});
+const showBlockingReason = computed(() => (
+  props.pipelineState?.awaiting_confirmation
+  && props.pipelineState?.execution_mode === "auto"
+  && props.pipelineState?.blocking_reason
+));
 const currentStepData = computed(() => {
   const ps = props.pipelineState;
-  if (!ps || !ps.current_step) return {};
-  const stepResult = ps.step_results?.[ps.current_step];
+  if (!ps || !currentStepKey.value) return {};
   // Data comes from the pipelineState top-level fields
-  switch (ps.current_step) {
+  switch (currentStepKey.value) {
     case "requirement_parsing":
       return { requirements: ps.requirements || [] };
     case "personnel_matching":
@@ -51,8 +65,6 @@ const currentStepData = computed(() => {
 });
 
 function getStepIcon(step) {
-  const result = props.pipelineState?.step_results?.[step.step];
-  if (result) return "✓";
   if (step.status === "completed") return "✓";
   if (step.status === "current") return isLoading.value ? "⟳" : "▶";
   return "·";
@@ -65,7 +77,9 @@ function getStepClass(step) {
 }
 
 async function handleConfirm() {
-  const action = isLastStep.value ? "execute" : "confirm";
+  const action = props.pipelineState?.execution_mode === "auto"
+    ? "confirm"
+    : (isLastStep.value ? "execute" : "confirm");
   try {
     const result = await workspaceStore.confirmPipelineStep(action);
     if (result.status === "complete") {
@@ -150,7 +164,7 @@ function changeTypeLabel(changeType) {
 }
 
 function countFamiliarityUpdates() {
-  const changes = currentStepData.value.module_changes || [];
+  const changes = props.pipelineState?.module_changes || [];
   return changes.filter(c => c.change_type === "update_owner" || c.familiarity_update).length;
 }
 </script>
@@ -183,6 +197,20 @@ function countFamiliarityUpdates() {
         <span class="step-label">{{ step.label }}</span>
       </div>
     </div>
+
+    <div v-if="pipelineState?.execution_mode" class="status-banner" :class="`status-${pipelineState.run_status || 'idle'}`">
+      <strong>{{ pipelineState.execution_mode === "auto" ? "自动分析" : "逐步确认" }}</strong>
+      <span v-if="pipelineState.run_status === 'queued'">已提交，等待后台执行。</span>
+      <span v-else-if="pipelineState.run_status === 'running'">后台正在连续执行后续节点。</span>
+      <span v-else-if="pipelineState.run_status === 'awaiting_confirmation' && pipelineState.execution_mode === 'auto'">自动流程已暂停，等待人工处理当前节点。</span>
+      <span v-else-if="pipelineState.run_status === 'awaiting_confirmation'">当前节点已生成，等待人工确认。</span>
+      <span v-else-if="pipelineState.run_status === 'completed'">所有节点已执行完成。</span>
+      <span v-else-if="pipelineState.run_status === 'failed'">流程执行失败，请检查原因后重试。</span>
+    </div>
+
+    <p v-if="showBlockingReason" class="blocking-reason">
+      {{ pipelineState.blocking_reason }}
+    </p>
 
     <!-- Loading indicator -->
     <div v-if="isLoading" class="loading-bar">
@@ -235,15 +263,15 @@ function countFamiliarityUpdates() {
             <div class="card-fields">
               <div class="field">
                 <span class="field-label">开发负责人：</span>
-                <span class="field-value">{{ assignment.developer || "—" }}</span>
+                <span class="field-value">{{ assignment.development_owner || assignment.developer || "—" }}</span>
               </div>
               <div class="field">
                 <span class="field-label">测试人：</span>
-                <span class="field-value">{{ assignment.tester || "—" }}</span>
+                <span class="field-value">{{ assignment.testing_owner || assignment.tester || "—" }}</span>
               </div>
               <div class="field">
                 <span class="field-label">B角：</span>
-                <span class="field-value">{{ assignment.backup || "—" }}</span>
+                <span class="field-value">{{ assignment.backup_owner || assignment.backup || "—" }}</span>
               </div>
               <div class="field">
                 <span class="field-label">协作人：</span>
@@ -337,7 +365,7 @@ function countFamiliarityUpdates() {
             <span class="stat-label">人员分配数</span>
           </div>
           <div class="stat-item">
-            <span class="stat-value">{{ (currentStepData.module_changes || []).length }}</span>
+            <span class="stat-value">{{ (pipelineState?.module_changes || []).length }}</span>
             <span class="stat-label">模块创建数</span>
           </div>
           <div class="stat-item">
@@ -345,7 +373,7 @@ function countFamiliarityUpdates() {
             <span class="stat-label">熟悉度更新数</span>
           </div>
           <div class="stat-item">
-            <span class="stat-value">{{ (currentStepData.single_points || []).length }}</span>
+            <span class="stat-value">{{ (pipelineState?.team_analysis?.single_points || []).length }}</span>
             <span class="stat-label">风险识别数</span>
           </div>
         </div>
@@ -360,10 +388,15 @@ function countFamiliarityUpdates() {
       <p v-if="pipelineState?.reply" class="step-reply">{{ pipelineState.reply }}</p>
     </div>
 
+    <div v-else-if="pipelineState?.is_complete && !isLoading" class="completion-summary">
+      <h4 class="result-title">分析完成</h4>
+      <p class="step-reply">{{ pipelineState?.reply || "全部步骤已执行完毕。" }}</p>
+    </div>
+
     <!-- Action Buttons -->
-    <div class="action-bar" :class="{ disabled: isLoading }">
+    <div v-if="showHumanActions" class="action-bar" :class="{ disabled: isLoading }">
       <button class="action-btn btn-confirm" :disabled="isLoading" @click="handleConfirm">
-        {{ isLastStep ? "执行变更" : "确认" }}
+        {{ pipelineState?.execution_mode === "auto" ? "继续自动执行" : (isLastStep ? "执行变更" : "确认") }}
       </button>
       <button class="action-btn btn-modify" :disabled="isLoading" @click="handleModify">修改</button>
       <button class="action-btn btn-reanalyze" :disabled="isLoading" @click="handleReanalyze">重新分析</button>
@@ -555,6 +588,49 @@ function countFamiliarityUpdates() {
 .loading-text {
   font-size: 13px;
   color: #666;
+}
+
+.status-banner {
+  margin: 12px 16px 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.status-banner strong {
+  margin-right: 8px;
+}
+
+.status-queued,
+.status-running {
+  background: #eef6ff;
+  color: #1f5f99;
+}
+
+.status-awaiting_confirmation {
+  background: #fff7e8;
+  color: #8a5d1a;
+}
+
+.status-completed {
+  background: #edf9f0;
+  color: #256c3b;
+}
+
+.status-failed {
+  background: #fff0f0;
+  color: #a83b3b;
+}
+
+.blocking-reason {
+  margin: 10px 16px 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: #fff4dd;
+  color: #7d5616;
+  font-size: 13px;
+  line-height: 1.5;
 }
 
 /* Step Result */
@@ -820,6 +896,10 @@ function countFamiliarityUpdates() {
   color: #888;
   margin: 8px 0 0;
   font-style: italic;
+}
+
+.completion-summary {
+  padding: 16px;
 }
 
 /* Empty hint */

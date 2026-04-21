@@ -147,11 +147,19 @@ function candidateLabel(candidate) {
             class="pipeline-inline-button"
             size="small"
             :disabled="generating"
-            @click="emit('start-pipeline')"
+            @click="emit('start-pipeline', 'auto')"
           >
-            启动 Pipeline 分析
+            自动分析
           </ElButton>
-          <span class="bubble-action-hint">基于当前解析结果生成分配建议</span>
+          <ElButton
+            class="pipeline-inline-button pipeline-inline-secondary"
+            size="small"
+            :disabled="generating"
+            @click="emit('start-pipeline', 'manual')"
+          >
+            逐步确认
+          </ElButton>
+          <span class="bubble-action-hint">自动模式会连续执行，遇到待确认节点才暂停</span>
         </div>
       </template>
     </div>

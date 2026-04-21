@@ -202,6 +202,54 @@ vi.mock("../api/client", () => ({
     })),
     getMonitoring: vi.fn(async () => ({ alerts: [{ reason: "risk" }] })),
     getInsights: vi.fn(async () => ({ insights: { heatmap: [{ member: "李祥" }], single_points: [], growth_suggestions: [] } })),
+    startPipeline: vi.fn(async (_, __, executionMode) => ({
+      workspace_id: "default",
+      execution_mode: executionMode,
+      run_status: executionMode === "auto" ? "queued" : "awaiting_confirmation",
+      status: executionMode === "auto" ? "queued" : "awaiting_confirmation",
+      awaiting_confirmation: executionMode === "manual",
+      current_step: "requirement_parsing",
+      step_progress: {
+        requirement_parsing: "in_progress",
+        personnel_matching: "pending",
+        module_extraction: "pending",
+        team_analysis: "pending",
+        knowledge_update: "pending",
+      },
+      step_results: {},
+    })),
+    getPipelineState: vi.fn(async () => ({
+      workspace_id: "default",
+      execution_mode: "auto",
+      run_status: "running",
+      status: "running",
+      awaiting_confirmation: false,
+      current_step: "requirement_parsing",
+      step_progress: {
+        requirement_parsing: "in_progress",
+        personnel_matching: "pending",
+        module_extraction: "pending",
+        team_analysis: "pending",
+        knowledge_update: "pending",
+      },
+      step_results: {},
+    })),
+    confirmPipelineStep: vi.fn(async () => ({
+      workspace_id: "default",
+      execution_mode: "auto",
+      run_status: "running",
+      status: "running",
+      awaiting_confirmation: false,
+      current_step: "personnel_matching",
+      step_progress: {
+        requirement_parsing: "completed",
+        personnel_matching: "in_progress",
+        module_extraction: "pending",
+        team_analysis: "pending",
+        knowledge_update: "pending",
+      },
+      step_results: { requirement_parsing: { summary: "done" } },
+    })),
     sendChatMessage: vi.fn(async () => ({
       workspace_id: "default",
       title: "default",
@@ -228,11 +276,13 @@ vi.mock("../api/client", () => ({
   },
 }));
 
+import { apiClient } from "../api/client";
 import { useWorkspaceStore } from "./workspace";
 
 describe("workspace store", () => {
   beforeEach(() => {
     setActivePinia(createPinia());
+    vi.clearAllMocks();
   });
 
   it("loads workspace and updates draft", async () => {
@@ -286,5 +336,21 @@ describe("workspace store", () => {
 
     await store.refreshInsights();
     expect(store.insights.heatmap[0].member).toBe("李祥");
+  });
+
+  it("starts auto pipeline and polls state in background", async () => {
+    vi.useFakeTimers();
+    const store = useWorkspaceStore();
+
+    await store.startPipeline("", "auto");
+    expect(store.pipelineState.execution_mode).toBe("auto");
+    expect(store.pipelineActive).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(2100);
+    expect(apiClient.getPipelineState).toHaveBeenCalled();
+
+    store.pipelineState = null;
+    store.syncPipelinePolling();
+    vi.useRealTimers();
   });
 });

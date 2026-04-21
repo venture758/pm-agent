@@ -2,6 +2,9 @@ import { defineStore } from "pinia";
 
 import { apiClient } from "../api/client";
 
+const PIPELINE_POLL_INTERVAL_MS = 2000;
+let pipelinePollTimer = null;
+
 const PIPELINE_STEPS = [
   "requirement_parsing",
   "personnel_matching",
@@ -120,10 +123,35 @@ function mapPipelineStepStatus(rawStatus) {
   if (rawStatus === "completed" || rawStatus === "skipped") {
     return "completed";
   }
-  if (rawStatus === "in_progress") {
+  if (rawStatus === "in_progress" || rawStatus === "awaiting_confirmation") {
     return "current";
   }
   return "pending";
+}
+
+function getLastStepWithResult(stepResults = {}) {
+  for (let index = PIPELINE_STEPS.length - 1; index >= 0; index -= 1) {
+    const step = PIPELINE_STEPS[index];
+    if (stepResults[step]) {
+      return step;
+    }
+  }
+  return "";
+}
+
+function shouldPollPipeline(state) {
+  return Boolean(
+    state
+      && state.execution_mode === "auto"
+      && (state.run_status === "queued" || state.run_status === "running"),
+  );
+}
+
+function stopPipelinePolling() {
+  if (pipelinePollTimer) {
+    clearInterval(pipelinePollTimer);
+    pipelinePollTimer = null;
+  }
 }
 
 function normalizePipelineState(payload) {
@@ -141,6 +169,10 @@ function normalizePipelineState(payload) {
     ? payload.step_results
     : {};
   const currentStep = String(payload.current_step || "");
+  const runStatus = String(payload.run_status || payload.status || "running");
+  const executionMode = String(payload.execution_mode || "manual");
+  const normalizedStatus = runStatus === "completed" ? "complete" : runStatus;
+  const displayStep = currentStep || getLastStepWithResult(stepResults);
 
   const stepProgress = PIPELINE_STEPS.map((step) => ({
     step,
@@ -167,13 +199,18 @@ function normalizePipelineState(payload) {
   const moduleResult = stepResults.module_extraction || {};
   const teamResult = stepResults.team_analysis || {};
   const knowledgeResult = stepResults.knowledge_update || {};
-  const currentResult = currentStep ? (stepResults[currentStep] || {}) : {};
-  const normalizedStatus = payload.status === "completed" ? "complete" : String(payload.status || "running");
+  const displayResult = displayStep ? (stepResults[displayStep] || {}) : {};
+  const isComplete = normalizedStatus === "complete";
+  const isAwaitingConfirmation = Boolean(payload.awaiting_confirmation) || runStatus === "awaiting_confirmation";
 
   return {
     ...payload,
+    execution_mode: executionMode,
+    run_status: runStatus,
     status: normalizedStatus,
-    is_complete: normalizedStatus === "complete",
+    is_complete: isComplete,
+    awaiting_confirmation: isAwaitingConfirmation,
+    blocking_reason: String(payload.blocking_reason || ""),
     current_step: currentStep,
     current_step_index: currentStepIndex,
     step_progress: stepProgress,
@@ -183,7 +220,8 @@ function normalizePipelineState(payload) {
     module_changes: asArray(moduleResult.module_changes || moduleResult.items),
     team_analysis: teamResult,
     pending_changes: asArray(knowledgeResult.pending_changes || knowledgeResult.items),
-    reply: currentResult.summary || payload.reply || "",
+    display_step: displayStep,
+    reply: String(displayResult.summary || payload.reply || ""),
   };
 }
 
@@ -875,14 +913,29 @@ export const useWorkspaceStore = defineStore("workspace", {
       }
     },
 
-    async startPipeline(message = "") {
+    syncPipelinePolling() {
+      if (!shouldPollPipeline(this.pipelineState)) {
+        stopPipelinePolling();
+        return;
+      }
+      if (pipelinePollTimer) {
+        return;
+      }
+      pipelinePollTimer = setInterval(() => {
+        this.loadPipelineState({ background: true }).catch(() => {});
+      }, PIPELINE_POLL_INTERVAL_MS);
+    },
+
+    async startPipeline(message = "", executionMode = "auto") {
       this.loading = true;
       try {
-        const result = await apiClient.startPipeline(this.workspaceId, message);
+        const result = await apiClient.startPipeline(this.workspaceId, message, executionMode);
         this.pipelineState = normalizePipelineState(result);
+        this.syncPipelinePolling();
         this.error = "";
         return this.pipelineState;
       } catch (error) {
+        stopPipelinePolling();
         this.error = error.message;
         throw error;
       } finally {
@@ -890,19 +943,26 @@ export const useWorkspaceStore = defineStore("workspace", {
       }
     },
 
-    async loadPipelineState() {
-      this.loading = true;
+    async loadPipelineState(options = {}) {
+      const background = Boolean(options.background);
+      if (!background) {
+        this.loading = true;
+      }
       try {
         const result = await apiClient.getPipelineState(this.workspaceId);
         this.pipelineState = normalizePipelineState(result);
+        this.syncPipelinePolling();
         this.error = "";
         return this.pipelineState;
       } catch (error) {
+        stopPipelinePolling();
         this.pipelineState = null;
-        this.error = "";
+        this.error = background ? this.error : "";
         return null;
       } finally {
-        this.loading = false;
+        if (!background) {
+          this.loading = false;
+        }
       }
     },
 
@@ -911,9 +971,11 @@ export const useWorkspaceStore = defineStore("workspace", {
       try {
         const result = await apiClient.confirmPipelineStep(this.workspaceId, action, options);
         this.pipelineState = normalizePipelineState(result);
+        this.syncPipelinePolling();
         this.error = "";
         return this.pipelineState;
       } catch (error) {
+        stopPipelinePolling();
         this.error = error.message;
         throw error;
       } finally {
@@ -923,10 +985,7 @@ export const useWorkspaceStore = defineStore("workspace", {
   },
   getters: {
     pipelineActive(state) {
-      return state.pipelineState
-        && state.pipelineState.status !== "complete"
-        && state.pipelineState.status !== "cancelled"
-        && !state.pipelineState.is_complete;
+      return Boolean(state.pipelineState);
     },
   },
 });
