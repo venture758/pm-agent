@@ -24,6 +24,7 @@ const sidebarOpenMobile = ref(false);
 const isNarrowScreen = ref(false);
 const pipelineDrawerOpen = ref(false);
 const lastHandledCompletedRunId = ref("");
+const initialPipelineLoad = ref(true);
 
 async function handleSendMessage(text) {
   try {
@@ -122,8 +123,14 @@ onMounted(() => {
       if (isNarrowScreen.value) {
         pipelineDrawerOpen.value = true;
       }
+    } else if (state && state.is_complete && state.run_id) {
+      // Mark the already-completed run as handled so the watch doesn't
+      // re-fire handlePipelineComplete() (and show the notification) on page refresh.
+      lastHandledCompletedRunId.value = state.run_id;
     }
-  }).catch(() => {});
+  }).catch(() => {}).finally(() => {
+    initialPipelineLoad.value = false;
+  });
 });
 
 watch(
@@ -142,6 +149,9 @@ watch(
       lastHandledCompletedRunId.value = "";
       return;
     }
+    // During initial mount, skip the complete handler — the run already finished
+    // in a previous session, so don't show a "completed" notification on refresh.
+    if (initialPipelineLoad.value) return;
     if (state.is_complete && state.run_id && state.run_id !== lastHandledCompletedRunId.value) {
       lastHandledCompletedRunId.value = state.run_id;
       await handlePipelineComplete();
@@ -224,7 +234,7 @@ watch(
     </aside>
 
     <!-- Main area -->
-    <main class="main-area" :class="{ 'has-pipeline': pipelineActive && !isNarrowScreen }">
+    <main class="main-area" :class="{ 'has-pipeline': pipelineActive && !isNarrowScreen && chatMessages.length > 0 }">
       <!-- Mobile top bar -->
       <div v-if="isNarrowScreen" class="mobile-topbar">
         <button class="hamburger" @click="toggleSidebar">
@@ -271,7 +281,7 @@ watch(
 
     <!-- Desktop Pipeline Panel -->
     <aside
-      v-if="pipelineActive && !isNarrowScreen && pipelineState"
+      v-if="pipelineActive && !isNarrowScreen && pipelineState && chatMessages.length > 0"
       class="pipeline-right-panel"
     >
       <PipelinePanel

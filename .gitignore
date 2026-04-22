@@ -4,3 +4,11 @@
 /.playwright-mcp/
 /.pm_agent_store/
 /backend-java/target/
+.classpath
+.project
+.settings
+.checkstyle
+.pm_agent_store/
+.pm_agent_store/
+*.png
+*.class
